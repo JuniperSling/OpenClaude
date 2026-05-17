@@ -23,7 +23,7 @@ type TextMessage = {
   role: "user" | "assistant" | "status";
   content: string;
   runId?: string;
-  images?: Array<{ name: string; sessionId: string; filename: string }>;
+  images?: Array<{ name: string; sessionId: string; filename: string; objectUrl?: string }>;
 };
 
 type ToolMessage = {
@@ -340,7 +340,20 @@ export function ChatShell() {
   function saveConversationCache(sessionId: string, cache: ConversationCache) {
     conversationCache.current.set(sessionId, cache);
     try {
-      window.sessionStorage.setItem(historyCacheKey(sessionId), JSON.stringify(cache));
+      // ObjectURLs only survive the page lifetime, so we strip them before
+      // serialising to sessionStorage. Server-backed sessionId+filename is
+      // still kept for re-loading the image after a tab refresh.
+      const persisted: ConversationCache = {
+        ...cache,
+        messages: cache.messages.map((message) => {
+          if (message.role !== "user" || !message.images) return message;
+          return {
+            ...message,
+            images: message.images.map(({ objectUrl: _objectUrl, ...rest }) => rest)
+          };
+        })
+      };
+      window.sessionStorage.setItem(historyCacheKey(sessionId), JSON.stringify(persisted));
     } catch {
       // Session storage can be full; in-memory cache still avoids refetches during this tab.
     }
@@ -506,7 +519,15 @@ export function ChatShell() {
       const userMessageId = crypto.randomUUID();
       const userImages = readyImages
         .filter((image) => image.attachmentId)
-        .map((image) => ({ name: image.name, sessionId: session!.id, filename: image.attachmentId! }));
+        .map((image) => ({
+          name: image.name,
+          sessionId: session!.id,
+          filename: image.attachmentId!,
+          // Keep the in-memory ObjectURL so the just-submitted user message can
+          // render instantly even before the server finishes renaming the
+          // staged file into the workspace uploads directory.
+          objectUrl: image.previewUrl
+        }));
       setMessages((current) => [
         ...current,
         {
@@ -878,7 +899,7 @@ export function ChatShell() {
                         {message.images.map((image, index) => (
                           <img
                             key={`${message.id}-img-${index}`}
-                            src={attachmentUrl(image.sessionId, image.filename, token)}
+                            src={image.objectUrl ?? attachmentUrl(image.sessionId, image.filename, token)}
                             alt={image.name}
                           />
                         ))}
