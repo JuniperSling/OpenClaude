@@ -137,6 +137,8 @@ Entry: `packages/agent-runtime/src/index.ts`.
 
 When the run has `image` attachments, the runtime builds an `AsyncIterable<SDKUserMessage>` instead of a plain string prompt. The user message contains `text` + `image` content blocks where the image source is `{ type: "base64", media_type, data }`, matching the Anthropic SDK's `Base64ImageSource` shape.
 
+When `resumeSessionId` is set the runtime first runs `sanitizeTranscriptForCrossModelResume()` against the SDK transcript file (`{sdkSessionStoragePath}/projects/<encoded cwd>/<sessionId>.jsonl`). It compares each assistant message's `model` provider (the part before `/` in the OpenRouter model id) with the target run's provider, and strips `thinking` / `redacted_thinking` / `reasoning` blocks from messages whose provider does not match. This lets users hop between Claude and DeepSeek (or any future provider) without the upstream API rejecting the foreign reasoning signature with HTTP 400; same-provider runs keep their thinking blocks intact for caching and continuity.
+
 `MockAgentRuntime` exists for local development without keys; do not use it in production.
 
 ## 6. Models and effort

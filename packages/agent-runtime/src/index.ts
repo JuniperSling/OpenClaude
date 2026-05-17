@@ -1,4 +1,6 @@
+import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
+import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { query, type McpServerConfig, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { getModel, getOpenRouterDefaults } from "@openclaude/model-registry";
@@ -76,6 +78,19 @@ export class ClaudeAgentRuntime implements AgentRuntime {
       imageAttachments.length > 0
         ? buildMultimodalPrompt(input.prompt, imageAttachments)
         : input.prompt;
+
+    if (input.resumeSessionId) {
+      try {
+        sanitizeTranscriptForCrossModelResume({
+          sdkSessionStoragePath: input.sdkSessionStoragePath,
+          workspaceRoot: input.workspaceRoot,
+          sessionId: input.resumeSessionId,
+          targetOpenRouterModel: model.openRouterModel
+        });
+      } catch (error) {
+        console.warn("Failed to sanitize transcript for cross-model resume", error);
+      }
+    }
 
     const stream = query({
       prompt: promptInput,
@@ -273,4 +288,73 @@ function buildMultimodalPrompt(
       parent_tool_use_id: null
     } as SDKUserMessage;
   })();
+}
+
+const CROSS_MODEL_INCOMPATIBLE_BLOCK_TYPES = new Set([
+  // Reasoning blocks carry provider-specific signatures. Cross-vendor APIs
+  // refuse them with HTTP 400 (e.g. Anthropic rejecting a DeepSeek thinking
+  // signature it cannot verify), so when the resumed transcript was authored
+  // by a different vendor we drop them and keep text + tool_use blocks.
+  "thinking",
+  "redacted_thinking",
+  "reasoning",
+  "reasoning_content"
+]);
+
+function providerFromOpenRouterModel(model: string | undefined): string {
+  if (typeof model !== "string") return "unknown";
+  const slash = model.indexOf("/");
+  if (slash > 0) return model.slice(0, slash).toLowerCase();
+  return model.toLowerCase();
+}
+
+function sdkTranscriptPath(sdkSessionStoragePath: string, workspaceRoot: string, sessionId: string): string {
+  const encodedCwd = workspaceRoot.replace(/[/\\]/g, "-");
+  return path.join(sdkSessionStoragePath, "projects", encodedCwd, `${sessionId}.jsonl`);
+}
+
+type AssistantContentBlock = { type?: string; [key: string]: unknown };
+
+type SdkTranscriptEvent = {
+  type?: string;
+  message?: { model?: string; content?: AssistantContentBlock[] };
+};
+
+function sanitizeTranscriptForCrossModelResume(args: {
+  sdkSessionStoragePath: string;
+  workspaceRoot: string;
+  sessionId: string;
+  targetOpenRouterModel: string;
+}): void {
+  const transcriptPath = sdkTranscriptPath(args.sdkSessionStoragePath, args.workspaceRoot, args.sessionId);
+  if (!existsSync(transcriptPath)) return;
+
+  const targetProvider = providerFromOpenRouterModel(args.targetOpenRouterModel);
+  const raw = readFileSync(transcriptPath, "utf8");
+  const lines = raw.split("\n");
+  let changed = false;
+
+  const next = lines.map((line) => {
+    if (!line.trim()) return line;
+    let event: SdkTranscriptEvent;
+    try {
+      event = JSON.parse(line) as SdkTranscriptEvent;
+    } catch {
+      return line;
+    }
+    if (event.type !== "assistant" || !event.message || !Array.isArray(event.message.content)) return line;
+    const sourceProvider = providerFromOpenRouterModel(event.message.model);
+    if (sourceProvider === targetProvider || sourceProvider === "unknown") return line;
+    const filtered = event.message.content.filter(
+      (block) => typeof block?.type === "string" && !CROSS_MODEL_INCOMPATIBLE_BLOCK_TYPES.has(block.type)
+    );
+    if (filtered.length === event.message.content.length) return line;
+    event.message.content = filtered;
+    changed = true;
+    return JSON.stringify(event);
+  });
+
+  if (changed) {
+    writeFileSync(transcriptPath, next.join("\n"), "utf8");
+  }
 }

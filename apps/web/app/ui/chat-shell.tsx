@@ -165,9 +165,17 @@ export function ChatShell() {
   function handleChatScroll(event: React.UIEvent<HTMLElement>) {
     const el = event.currentTarget;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    const atBottom = distance < 80;
-    stickToBottomRef.current = atBottom;
-    setIsAtBottom(atBottom);
+    setIsAtBottom((current) => {
+      // Use hysteresis so the composer doesn't flicker around the threshold:
+      // once the user is "at bottom" we keep it that way until they scroll up
+      // a clear distance, and once they're scrolled up they need to scroll
+      // most of the way back before we re-attach.
+      const STAY_AT_BOTTOM_PX = 200;
+      const ENTER_BOTTOM_PX = 40;
+      const next = current ? distance <= STAY_AT_BOTTOM_PX : distance < ENTER_BOTTOM_PX;
+      stickToBottomRef.current = next;
+      return next;
+    });
   }
 
   function scrollChatToBottom() {
