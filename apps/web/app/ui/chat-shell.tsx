@@ -23,7 +23,7 @@ type TextMessage = {
   role: "user" | "assistant" | "status";
   content: string;
   runId?: string;
-  images?: Array<{ dataUrl: string; name: string }>;
+  images?: Array<{ name: string; sessionId: string; filename: string }>;
 };
 
 type ToolMessage = {
@@ -496,7 +496,9 @@ export function ChatShell() {
         setActiveSessionId(created.session.id);
       }
       const userMessageId = crypto.randomUUID();
-      const userImages = readyImages.map((image) => ({ dataUrl: image.previewUrl, name: image.name }));
+      const userImages = readyImages
+        .filter((image) => image.attachmentId)
+        .map((image) => ({ name: image.name, sessionId: session!.id, filename: image.attachmentId! }));
       setMessages((current) => [
         ...current,
         {
@@ -863,12 +865,12 @@ export function ChatShell() {
                     {message.role === "assistant" && (!message.runId || openRawRunId !== message.runId) ? (
                       <MarkdownContent content={message.content} />
                     ) : null}
-                    {message.role === "user" && message.images?.length ? (
+                    {message.role === "user" && message.images?.length && token ? (
                       <div className="user-images">
                         {message.images.map((image, index) => (
                           <img
                             key={`${message.id}-img-${index}`}
-                            src={image.dataUrl}
+                            src={attachmentUrl(image.sessionId, image.filename, token)}
                             alt={image.name}
                           />
                         ))}
@@ -1425,13 +1427,23 @@ function buildMessagesFromHistory(historyMessages: StoredHistoryMessage[]): Chat
         status: message.toolStatus ?? "done"
       };
     }
+    const images = message.attachments?.map((attachment) => ({
+      name: attachment.filename,
+      sessionId: message.sessionId,
+      filename: attachment.filename
+    }));
     return {
       id: message.id,
       role: message.role,
       runId: message.runId,
-      content: message.content ?? ""
+      content: message.content ?? "",
+      images: images && images.length > 0 ? images : undefined
     };
   });
+}
+
+function attachmentUrl(sessionId: string, filename: string, token: string): string {
+  return `/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(filename)}?token=${encodeURIComponent(token)}`;
 }
 
 function appendEnvelopeToMessageList(

@@ -23,7 +23,9 @@ export function signToken(user: User) {
 export function authenticate(store: FileStore) {
   return (request: Request, response: Response, next: NextFunction) => {
     const header = request.header("authorization");
-    const token = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
+    const headerToken = header?.startsWith("Bearer ") ? header.slice("Bearer ".length) : undefined;
+    const queryToken = typeof request.query.token === "string" ? request.query.token : undefined;
+    const token = headerToken ?? queryToken;
     if (!token) {
       response.status(401).json({ error: "Missing bearer token" });
       return;

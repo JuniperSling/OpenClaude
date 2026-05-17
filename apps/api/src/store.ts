@@ -23,9 +23,16 @@ export type StoredMessage = {
   toolInput?: unknown;
   toolResult?: unknown;
   toolStatus?: "running" | "done";
+  attachments?: StoredMessageAttachment[];
   sequence: number;
   createdAt: string;
   updatedAt: string;
+};
+
+export type StoredMessageAttachment = {
+  filename: string;
+  mimeType?: string;
+  sizeBytes?: number;
 };
 
 export type StoredRunMeta = {
@@ -100,9 +107,18 @@ export class FileStore {
     this.db.exec("PRAGMA journal_mode = WAL");
     this.db.exec("PRAGMA foreign_keys = ON");
     this.createSchema();
+    this.runColumnMigrations();
     await this.migrateLegacyStoreIfNeeded();
     await this.ensureAdminUser();
     await this.markRunningRunsInterrupted();
+  }
+
+  private runColumnMigrations() {
+    const columns = this.database().prepare("PRAGMA table_info(messages)").all() as Array<{ name: string }>;
+    const hasAttachments = columns.some((col) => col.name === "attachments_json");
+    if (!hasAttachments) {
+      this.database().exec("ALTER TABLE messages ADD COLUMN attachments_json TEXT");
+    }
   }
 
   getUserByUsername(username: string) {
@@ -485,6 +501,7 @@ export class FileStore {
         tool_input_json TEXT,
         tool_result_json TEXT,
         tool_status TEXT,
+        attachments_json TEXT,
         sequence INTEGER NOT NULL,
         created_at TEXT NOT NULL,
         updated_at TEXT NOT NULL,
@@ -648,13 +665,30 @@ export class FileStore {
   }
 
   private insertUserMessage(run: Run) {
+    const attachments: StoredMessageAttachment[] =
+      run.input.attachments
+        ?.filter((attachment) => attachment.kind === "image")
+        .map((attachment) => ({
+          filename: path.basename(attachment.workspaceFilePath),
+          mimeType: attachment.mimeType,
+          sizeBytes: attachment.sizeBytes
+        })) ?? [];
+
     this.database()
       .prepare(
         `INSERT OR IGNORE INTO messages (
-          id, session_id, run_id, role, content, sequence, created_at, updated_at
-        ) VALUES (?, ?, ?, 'user', ?, 0, ?, ?)`
+          id, session_id, run_id, role, content, attachments_json, sequence, created_at, updated_at
+        ) VALUES (?, ?, ?, 'user', ?, ?, 0, ?, ?)`
       )
-      .run(`user-${run.id}`, run.sessionId, run.id, run.input.prompt, run.createdAt, run.updatedAt);
+      .run(
+        `user-${run.id}`,
+        run.sessionId,
+        run.id,
+        run.input.prompt,
+        attachments.length > 0 ? JSON.stringify(attachments) : null,
+        run.createdAt,
+        run.updatedAt
+      );
   }
 
   private touchSession(sessionId: string) {
@@ -830,6 +864,9 @@ function mapMessage(row: Record<string, unknown>): StoredMessage {
     toolInput: row.tool_input_json ? JSON.parse(String(row.tool_input_json)) : undefined,
     toolResult: row.tool_result_json ? JSON.parse(String(row.tool_result_json)) : undefined,
     toolStatus: (nullableString(row.tool_status) as StoredMessage["toolStatus"]) ?? undefined,
+    attachments: row.attachments_json
+      ? (JSON.parse(String(row.attachments_json)) as StoredMessageAttachment[])
+      : undefined,
     sequence: Number(row.sequence),
     createdAt: String(row.created_at),
     updatedAt: String(row.updated_at)

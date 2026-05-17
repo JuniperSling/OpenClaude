@@ -109,6 +109,7 @@ HTTP endpoints currently served:
 - `GET /api/runs/:runId`
 - `POST /api/uploads` — multipart/form-data (`files` field, up to 8 images, ≤25MB each, MIME must start with `image/`). Saved to `users/{userId}/staging/{uuid}{ext}` via multer disk storage; returns `{ uploads: [{ id, mimeType, name, sizeBytes }] }`. The `id` is opaque and only valid for the same user.
 - `POST /api/runs` — accepts `attachmentIds: string[]`. The server validates each id has no path separators, then `rename()`s the staged file into `workspaces/{id}/uploads/` and records it on `RunInput.attachments`. Inline base64 has been removed.
+- `GET /api/sessions/:sessionId/attachments/:filename` — streams an image saved under `workspaces/{id}/uploads/`. Authentication accepts either an `Authorization: Bearer` header or a `?token=` query param so that `<img>` tags can load attachments without bespoke fetch wiring. The server validates the session ownership and rejects path-traversal filenames.
 - `DELETE /api/runs/:runId`
 
 WebSocket `/ws` (in `RunRegistry.attach`):
@@ -195,7 +196,7 @@ Tables:
 - `sessions` — `sdk_session_id`, `sdk_session_storage_path`, `current_model`, `title`
 - `runs` — status, model, input JSON, started/finished, cost, num_turns, stop_reason
 - `events` — `(run_id, sequence)` PK, raw SDK envelope JSON
-- `messages` — UI-friendly summary (user prompt, assistant streamed text, tool_use + tool_result pairs)
+- `messages` — UI-friendly summary (user prompt, assistant streamed text, tool_use + tool_result pairs). The `attachments_json` column stores image attachments as `[{ filename, mimeType, sizeBytes }]` so that history reloads can re-render them via `GET /api/sessions/:id/attachments/:filename`. A startup migration (`runColumnMigrations`) adds this column to existing DBs.
 
 History UI is built from `messages` only; raw events are kept around for debugging and the `view` / `raw` toggle.
 

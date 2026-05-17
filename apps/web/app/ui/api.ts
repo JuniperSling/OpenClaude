@@ -9,6 +9,12 @@ export type ModelOption = {
   supportsEffort: boolean;
 };
 
+export type StoredHistoryAttachment = {
+  filename: string;
+  mimeType?: string;
+  sizeBytes?: number;
+};
+
 export type StoredHistoryMessage = {
   id: string;
   sessionId: string;
@@ -20,6 +26,7 @@ export type StoredHistoryMessage = {
   toolInput?: unknown;
   toolResult?: unknown;
   toolStatus?: "running" | "done";
+  attachments?: StoredHistoryAttachment[];
   sequence: number;
   createdAt: string;
   updatedAt: string;

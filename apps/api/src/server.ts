@@ -227,6 +227,29 @@ app.get("/api/sessions/:sessionId/history", (request, response, next) => {
   }
 });
 
+app.get("/api/sessions/:sessionId/attachments/:filename", (request, response, next) => {
+  try {
+    const filename = request.params.filename;
+    if (!filename || filename.includes("/") || filename.includes("\\") || filename.includes("..")) {
+      response.status(400).json({ error: "Invalid filename" });
+      return;
+    }
+    const session = store.getSessionWithWorkspace(request.params.sessionId, request.user!.id);
+    if (!session) {
+      response.status(404).json({ error: "Session not found" });
+      return;
+    }
+    const fullPath = path.join(session.workspace.rootPath, "uploads", filename);
+    response.sendFile(fullPath, {
+      headers: {
+        "Cache-Control": "private, max-age=86400"
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/runs/:runId", (request, response) => {
   const snapshot = store.getRunSnapshot(request.params.runId);
   if (!snapshot || snapshot.userId !== request.user!.id) {
