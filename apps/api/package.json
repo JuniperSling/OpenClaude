@@ -19,6 +19,7 @@
     "express": "latest",
     "jsonwebtoken": "latest",
     "multer": "latest",
+    "sharp": "latest",
     "uuid": "latest",
     "ws": "latest",
     "zod": "latest"

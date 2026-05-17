@@ -109,7 +109,7 @@ HTTP endpoints currently served:
 - `GET /api/runs/:runId`
 - `POST /api/uploads` — multipart/form-data (`files` field, up to 8 images, ≤25MB each, MIME must start with `image/`). Saved to `users/{userId}/staging/{uuid}{ext}` via multer disk storage; returns `{ uploads: [{ id, mimeType, name, sizeBytes }] }`. The `id` is opaque and only valid for the same user.
 - `POST /api/runs` — accepts `attachmentIds: string[]`. The server validates each id has no path separators, then `rename()`s the staged file into `workspaces/{id}/uploads/` and records it on `RunInput.attachments`. Inline base64 has been removed.
-- `GET /api/sessions/:sessionId/attachments/:filename` — streams an image saved under `workspaces/{id}/uploads/`. Authentication accepts either an `Authorization: Bearer` header or a `?token=` query param so that `<img>` tags can load attachments without bespoke fetch wiring. The server validates the session ownership and rejects path-traversal filenames.
+- `GET /api/sessions/:sessionId/attachments/:filename` — streams the image stored under `workspaces/{id}/uploads/`. By default it returns a `sharp`-generated JPEG thumbnail (≤1024px, q=80) cached in `uploads/thumbs/`; pass `?full=1` to fetch the original. Authentication accepts either an `Authorization: Bearer` header or a `?token=` query param so that `<img>` tags can load attachments without bespoke fetch wiring. The server validates the session ownership and rejects path-traversal filenames.
 - `DELETE /api/runs/:runId`
 
 WebSocket `/ws` (in `RunRegistry.attach`):
@@ -151,7 +151,7 @@ When `resumeSessionId` is set the runtime first runs `sanitizeTranscriptForCross
 | `claude-opus-4.7` | OpenRouter | `anthropic/claude-opus-4.7` | yes | yes | |
 | `deepseek-v4-flash` | OpenRouter | `deepseek/deepseek-v4-flash` | no | no | text-only |
 | `deepseek-v4-pro` | OpenRouter | `deepseek/deepseek-v4-pro` | no | no | text-only |
-| `anthropic/claude-haiku-4.5` | OpenRouter | (used internally for title generation only) | — | — | not user-selectable |
+| `anthropic/claude-haiku-4.5` | OpenRouter | (used internally for title generation only — image attachments are downscaled to a ≤1024px JPEG thumbnail before being sent to Haiku so OpenRouter providers like Bedrock don't reject large originals) | — | — | not user-selectable |
 
 `getOpenRouterDefaults(modelId)` builds the env vars handed to the SDK:
 

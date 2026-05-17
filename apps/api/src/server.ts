@@ -1,9 +1,10 @@
 import http from "node:http";
-import { mkdir, readFile, rename, stat } from "node:fs/promises";
+import { mkdir, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import cors from "cors";
 import express from "express";
 import multer from "multer";
+import sharp from "sharp";
 import { v4 as uuid } from "uuid";
 import { ClaudeAgentRuntime, MockAgentRuntime } from "@openclaude/agent-runtime";
 import { DEFAULT_MODEL_ID, EFFORT_LEVELS, models } from "@openclaude/model-registry";
@@ -227,7 +228,7 @@ app.get("/api/sessions/:sessionId/history", (request, response, next) => {
   }
 });
 
-app.get("/api/sessions/:sessionId/attachments/:filename", (request, response, next) => {
+app.get("/api/sessions/:sessionId/attachments/:filename", async (request, response, next) => {
   try {
     const filename = request.params.filename;
     if (!filename || filename.includes("/") || filename.includes("\\") || filename.includes("..")) {
@@ -239,8 +240,17 @@ app.get("/api/sessions/:sessionId/attachments/:filename", (request, response, ne
       response.status(404).json({ error: "Session not found" });
       return;
     }
-    const fullPath = path.join(session.workspace.rootPath, "uploads", filename);
-    response.sendFile(fullPath, {
+    const uploadsDir = path.join(session.workspace.rootPath, "uploads");
+    const thumbsDir = path.join(uploadsDir, "thumbs");
+    const fullPath = path.join(uploadsDir, filename);
+    const wantsFull = request.query.full === "1" || request.query.full === "true";
+
+    let target = fullPath;
+    if (!wantsFull) {
+      const thumb = await ensureThumbnail(fullPath, thumbsDir, filename);
+      if (thumb) target = thumb;
+    }
+    response.sendFile(target, {
       headers: {
         "Cache-Control": "private, max-age=86400"
       }
@@ -400,9 +410,64 @@ type TitleAttachment = {
   kind?: "image" | "file";
 };
 
-const TITLE_VISION_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
 const TITLE_MAX_IMAGES = 3;
-const TITLE_MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+const VISION_THUMBNAIL_MAX_DIMENSION = 1024;
+const ATTACHMENT_THUMBNAIL_MAX_DIMENSION = 1024;
+const VISION_JPEG_QUALITY = 80;
+
+async function ensureThumbnail(filePath: string, thumbDir: string, filename: string): Promise<string | undefined> {
+  const thumbPath = path.join(thumbDir, `${filename}.jpg`);
+  let originalStat: Awaited<ReturnType<typeof stat>>;
+  try {
+    originalStat = await stat(filePath);
+  } catch {
+    return undefined;
+  }
+  try {
+    const thumbStat = await stat(thumbPath);
+    if (thumbStat.mtimeMs >= originalStat.mtimeMs) return thumbPath;
+  } catch {
+    // thumbnail missing — fall through to (re)generate
+  }
+  try {
+    await mkdir(thumbDir, { recursive: true });
+    await sharp(filePath)
+      .rotate()
+      .resize({
+        width: ATTACHMENT_THUMBNAIL_MAX_DIMENSION,
+        height: ATTACHMENT_THUMBNAIL_MAX_DIMENSION,
+        fit: "inside",
+        withoutEnlargement: true
+      })
+      .jpeg({ quality: VISION_JPEG_QUALITY, mozjpeg: true })
+      .toFile(thumbPath);
+    return thumbPath;
+  } catch (error) {
+    console.warn("Failed to generate thumbnail", filePath, error);
+    return undefined;
+  }
+}
+
+async function loadVisionThumbnail(
+  filePath: string
+): Promise<{ data: string; mediaType: "image/jpeg" } | undefined> {
+  try {
+    const buffer = await sharp(filePath)
+      .rotate()
+      .resize({
+        width: VISION_THUMBNAIL_MAX_DIMENSION,
+        height: VISION_THUMBNAIL_MAX_DIMENSION,
+        fit: "inside",
+        withoutEnlargement: true
+      })
+      .jpeg({ quality: VISION_JPEG_QUALITY, mozjpeg: true })
+      .toBuffer();
+    return { data: buffer.toString("base64"), mediaType: "image/jpeg" };
+  } catch (error) {
+    console.warn("Failed to prepare vision thumbnail", filePath, error);
+    return undefined;
+  }
+}
 
 async function generateSessionTitle(
   prompt: string,
@@ -414,31 +479,23 @@ async function generateSessionTitle(
   for (const attachment of attachments) {
     if (imageBlocks.length >= TITLE_MAX_IMAGES) break;
     if (attachment.kind !== "image") continue;
-    if (!attachment.mimeType || !TITLE_VISION_MIME_TYPES.has(attachment.mimeType)) continue;
-    try {
-      const info = await stat(attachment.workspaceFilePath);
-      if (info.size > TITLE_MAX_IMAGE_BYTES) continue;
-      const buffer = await readFile(attachment.workspaceFilePath);
-      imageBlocks.push({
-        type: "image_url",
-        image_url: { url: `data:${attachment.mimeType};base64,${buffer.toString("base64")}` }
-      });
-    } catch (error) {
-      console.warn("Failed to read image for title generation", attachment.workspaceFilePath, error);
-    }
+    const thumbnail = await loadVisionThumbnail(attachment.workspaceFilePath);
+    if (!thumbnail) continue;
+    imageBlocks.push({
+      type: "image_url",
+      image_url: { url: `data:${thumbnail.mediaType};base64,${thumbnail.data}` }
+    });
   }
 
   const trimmedPrompt = prompt.trim();
+  const hasUserText = Boolean(trimmedPrompt) && trimmedPrompt !== "(image input)";
+  const introText = hasUserText
+    ? `Title this conversation. The user just sent the following message${imageBlocks.length > 0 ? " (with image attachments shown below)" : ""}:\n\n${trimmedPrompt.slice(0, 2000)}`
+    : "Title this conversation. The user sent only image attachments — base the title on what the images show.";
   const userContent: Array<
     | { type: "text"; text: string }
     | { type: "image_url"; image_url: { url: string } }
-  > = [];
-  if (trimmedPrompt && trimmedPrompt !== "(image input)") {
-    userContent.push({ type: "text", text: trimmedPrompt.slice(0, 2000) });
-  } else if (imageBlocks.length === 0) {
-    userContent.push({ type: "text", text: trimmedPrompt.slice(0, 2000) });
-  }
-  for (const block of imageBlocks) userContent.push(block);
+  > = [{ type: "text", text: introText }, ...imageBlocks];
   if (userContent.length === 0) return undefined;
 
   const controller = new AbortController();
@@ -456,7 +513,7 @@ async function generateSessionTitle(
           {
             role: "system",
             content:
-              "You write concise titles for chat conversations. Read the user's first message — including any attached images — and return ONLY the title text, with no quotes and no trailing punctuation. Match the user's language. Limit: 8 Chinese characters or 5 English words. If the message is mostly an image, summarise the image content."
+              "You generate conversation titles. ALWAYS reply with the title text only — no quotes, no trailing punctuation, no explanations, never ask the user for more information. Match the user's language. Maximum 8 Chinese characters or 5 English words. If the user message is short or only contains images, infer the topic from whatever you can see."
           },
           { role: "user", content: userContent }
         ],
