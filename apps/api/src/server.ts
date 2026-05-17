@@ -1,8 +1,9 @@
 import http from "node:http";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import cors from "cors";
 import express from "express";
+import multer from "multer";
 import { v4 as uuid } from "uuid";
 import { ClaudeAgentRuntime, MockAgentRuntime } from "@openclaude/agent-runtime";
 import { DEFAULT_MODEL_ID, EFFORT_LEVELS, models } from "@openclaude/model-registry";
@@ -40,7 +41,7 @@ const runs = new RunRegistry(store, runtime);
 
 app.set("trust proxy", 1);
 app.use(cors({ origin: config.corsOrigin, credentials: true }));
-app.use(express.json({ limit: "30mb" }));
+app.use(express.json({ limit: "1mb" }));
 
 app.get("/health", (_request, response) => {
   response.json({ ok: true, runtimeMode: config.runtimeMode });
@@ -92,6 +93,61 @@ app.get("/api/models", (_request, response) => {
 });
 
 app.use("/api", authenticate(store));
+
+const STAGING_DIR_NAME = "staging";
+const SUPPORTED_UPLOAD_PREFIX = "image/";
+
+const uploadStorage = multer.diskStorage({
+  destination: async (request, _file, cb) => {
+    try {
+      const dir = path.join(config.dataDir, "users", request.user!.id, STAGING_DIR_NAME);
+      await mkdir(dir, { recursive: true });
+      cb(null, dir);
+    } catch (err) {
+      cb(err as Error, "");
+    }
+  },
+  filename: (_request, file, cb) => {
+    const ext = guessImageExt(file.mimetype, file.originalname);
+    cb(null, `${uuid()}${ext}`);
+  }
+});
+
+const uploadMiddleware = multer({
+  storage: uploadStorage,
+  limits: { fileSize: 25 * 1024 * 1024, files: 8 },
+  fileFilter: (_request, file, cb) => {
+    if (file.mimetype.startsWith(SUPPORTED_UPLOAD_PREFIX)) {
+      cb(null, true);
+    } else {
+      cb(new Error(`Unsupported upload type: ${file.mimetype}`));
+    }
+  }
+});
+
+app.post(
+  "/api/uploads",
+  (request, response, next) => {
+    uploadMiddleware.array("files", 8)(request, response, (err) => {
+      if (err) {
+        response.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+        return;
+      }
+      next();
+    });
+  },
+  (request, response) => {
+    const files = (request.files as Express.Multer.File[] | undefined) ?? [];
+    response.json({
+      uploads: files.map((file) => ({
+        id: file.filename,
+        mimeType: file.mimetype,
+        name: file.originalname,
+        sizeBytes: file.size
+      }))
+    });
+  }
+);
 
 app.get("/api/me", (request, response) => {
   response.json({ user: request.user });
@@ -200,21 +256,35 @@ app.post("/api/runs", async (request, response, next) => {
       return;
     }
 
-    const attachments = [...(parsed.data.attachments ?? [])];
-    if (parsed.data.images?.length) {
+    const attachments: Array<{
+      workspaceFilePath: string;
+      mimeType?: string;
+      sizeBytes?: number;
+      kind?: "image" | "file";
+    }> = [];
+    if (parsed.data.attachmentIds?.length) {
       const uploadsDir = path.join(workspace.rootPath, "uploads");
       await mkdir(uploadsDir, { recursive: true });
-      for (const image of parsed.data.images) {
-        const buffer = Buffer.from(image.base64, "base64");
-        if (buffer.length === 0) continue;
-        const ext = guessImageExt(image.mimeType, image.name);
-        const filename = `${uuid()}${ext}`;
-        const fullPath = path.join(uploadsDir, filename);
-        await writeFile(fullPath, buffer);
+      const stagingDir = path.join(config.dataDir, "users", request.user!.id, STAGING_DIR_NAME);
+      for (const id of parsed.data.attachmentIds) {
+        if (id.includes("/") || id.includes("\\") || id.includes("..")) {
+          response.status(400).json({ error: `Invalid attachment id: ${id}` });
+          return;
+        }
+        const stagedPath = path.join(stagingDir, id);
+        let info: Awaited<ReturnType<typeof stat>>;
+        try {
+          info = await stat(stagedPath);
+        } catch {
+          response.status(404).json({ error: `Attachment not found: ${id}` });
+          return;
+        }
+        const targetPath = path.join(uploadsDir, id);
+        await rename(stagedPath, targetPath);
         attachments.push({
-          workspaceFilePath: fullPath,
-          mimeType: image.mimeType,
-          sizeBytes: buffer.length,
+          workspaceFilePath: targetPath,
+          mimeType: mimeFromExt(path.extname(id).toLowerCase()),
+          sizeBytes: info.size,
           kind: "image"
         });
       }
@@ -365,7 +435,31 @@ function guessImageExt(mimeType: string, name?: string) {
       return ".gif";
     case "image/webp":
       return ".webp";
+    case "image/heic":
+      return ".heic";
+    case "image/heif":
+      return ".heif";
     default:
       return ".bin";
+  }
+}
+
+function mimeFromExt(ext: string): string | undefined {
+  switch (ext) {
+    case ".jpg":
+    case ".jpeg":
+      return "image/jpeg";
+    case ".png":
+      return "image/png";
+    case ".gif":
+      return "image/gif";
+    case ".webp":
+      return "image/webp";
+    case ".heic":
+      return "image/heic";
+    case ".heif":
+      return "image/heif";
+    default:
+      return undefined;
   }
 }

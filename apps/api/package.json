@@ -18,6 +18,7 @@
     "dotenv": "latest",
     "express": "latest",
     "jsonwebtoken": "latest",
+    "multer": "latest",
     "uuid": "latest",
     "ws": "latest",
     "zod": "latest"
@@ -26,6 +27,7 @@
     "@types/cors": "latest",
     "@types/express": "latest",
     "@types/jsonwebtoken": "latest",
+    "@types/multer": "latest",
     "@types/ws": "latest"
   }
 }

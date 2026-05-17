@@ -75,16 +75,37 @@ export async function getSessionHistory(
   return request(`/api/sessions/${sessionId}/history`, { token });
 }
 
-export type CreateRunBody = CreateRunRequest & {
-  images?: Array<{ name?: string; mimeType: string; base64: string }>;
-};
-
-export async function createRun(token: string, body: CreateRunBody): Promise<{ run: Run }> {
+export async function createRun(token: string, body: CreateRunRequest): Promise<{ run: Run }> {
   return request("/api/runs", {
     token,
     method: "POST",
     body: JSON.stringify(body)
   });
+}
+
+export type UploadedAttachment = {
+  id: string;
+  mimeType: string;
+  name: string;
+  sizeBytes: number;
+};
+
+export async function uploadAttachments(
+  token: string,
+  files: File[]
+): Promise<{ uploads: UploadedAttachment[] }> {
+  const formData = new FormData();
+  for (const file of files) formData.append("files", file, file.name);
+  const response = await fetch(`${API_BASE_URL}/api/uploads`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: formData
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || response.statusText);
+  }
+  return response.json() as Promise<{ uploads: UploadedAttachment[] }>;
 }
 
 export async function deleteSession(token: string, sessionId: string): Promise<{ ok: true }> {

@@ -12,6 +12,7 @@ import {
   getSessionHistory,
   getSessions,
   login,
+  uploadAttachments,
   type ModelOption,
   type StoredHistoryMessage,
   type StoredRunMeta
@@ -66,15 +67,16 @@ type ConversationCache = {
 };
 
 type PendingImage = {
-  id: string;
+  localId: string;
+  attachmentId?: string;
   name: string;
   mimeType: string;
-  dataUrl: string;
-  base64: string;
+  previewUrl: string;
+  status: "uploading" | "ready" | "error";
+  error?: string;
 };
 
-const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
-const MAX_IMAGE_BYTES = 10 * 1024 * 1024;
+const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
 function getWsBaseUrl() {
   if (process.env.NEXT_PUBLIC_WS_BASE_URL) return process.env.NEXT_PUBLIC_WS_BASE_URL;
@@ -111,6 +113,7 @@ export function ChatShell() {
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const chatLogRef = useRef<HTMLElement | null>(null);
   const stickToBottomRef = useRef(true);
+  const [isAtBottom, setIsAtBottom] = useState(true);
   const streamedRunIds = useRef(new Set<string>());
   const textQueues = useRef(new Map<string, string>());
   const textTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
@@ -157,7 +160,15 @@ export function ChatShell() {
   function handleChatScroll(event: React.UIEvent<HTMLElement>) {
     const el = event.currentTarget;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
-    stickToBottomRef.current = distance < 80;
+    const atBottom = distance < 80;
+    stickToBottomRef.current = atBottom;
+    setIsAtBottom(atBottom);
+  }
+
+  function scrollChatToBottom() {
+    stickToBottomRef.current = true;
+    setIsAtBottom(true);
+    chatEndRef.current?.scrollIntoView({ block: "end", behavior: "smooth" });
   }
 
   useEffect(() => {
@@ -198,38 +209,64 @@ export function ChatShell() {
   }
 
   async function ingestFiles(files: FileList | File[]) {
+    if (!token) return;
     const list = Array.from(files);
-    const accepted: PendingImage[] = [];
+    const queue: Array<{ pending: PendingImage; file: File }> = [];
     for (const file of list) {
-      if (!SUPPORTED_IMAGE_MIME_TYPES.has(file.type)) {
+      const mimeType = file.type || guessMimeFromName(file.name);
+      if (!mimeType.startsWith("image/")) {
         setError(`不支持的图片类型: ${file.type || file.name}`);
         continue;
       }
       if (file.size > MAX_IMAGE_BYTES) {
-        setError(`图片过大: ${file.name}（最大 10MB）`);
+        setError(`图片过大: ${file.name}（最大 25MB）`);
         continue;
       }
-      try {
-        const dataUrl = await readFileAsDataUrl(file);
-        const base64 = dataUrl.split(",", 2)[1] ?? "";
-        accepted.push({
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          name: file.name,
-          mimeType: file.type,
-          dataUrl,
-          base64
-        });
-      } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
-      }
+      const previewUrl = URL.createObjectURL(file);
+      const pending: PendingImage = {
+        localId: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        name: file.name,
+        mimeType,
+        previewUrl,
+        status: "uploading"
+      };
+      queue.push({ pending, file });
     }
-    if (accepted.length > 0) {
-      setPendingImages((current) => [...current, ...accepted].slice(0, 8));
+
+    if (queue.length === 0) return;
+
+    setPendingImages((current) => [...current, ...queue.map((q) => q.pending)].slice(0, 8));
+
+    for (const { pending, file } of queue) {
+      try {
+        const result = await uploadAttachments(token, [file]);
+        const upload = result.uploads[0];
+        if (!upload) throw new Error("Upload failed");
+        setPendingImages((current) =>
+          current.map((image) =>
+            image.localId === pending.localId
+              ? { ...image, status: "ready", attachmentId: upload.id, mimeType: upload.mimeType || image.mimeType }
+              : image
+          )
+        );
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        setError(message);
+        setPendingImages((current) =>
+          current.map((image) =>
+            image.localId === pending.localId ? { ...image, status: "error", error: message } : image
+          )
+        );
+      }
     }
   }
 
-  function removePendingImage(id: string) {
-    setPendingImages((current) => current.filter((image) => image.id !== id));
+  function removePendingImage(localId: string) {
+    setPendingImages((current) => {
+      const target = current.find((image) => image.localId === localId);
+      if (target) URL.revokeObjectURL(target.previewUrl);
+      return current.filter((image) => image.localId !== localId);
+    });
   }
 
   function handleComposerPaste(event: React.ClipboardEvent<HTMLTextAreaElement>) {
@@ -239,7 +276,9 @@ export function ChatShell() {
     for (const item of Array.from(items)) {
       if (item.kind === "file") {
         const file = item.getAsFile();
-        if (file && SUPPORTED_IMAGE_MIME_TYPES.has(file.type)) files.push(file);
+        if (file && (file.type.startsWith("image/") || guessMimeFromName(file.name).startsWith("image/"))) {
+          files.push(file);
+        }
       }
     }
     if (files.length > 0) {
@@ -382,6 +421,7 @@ export function ChatShell() {
     clearPendingAsk();
     clearTextQueues();
     stickToBottomRef.current = true;
+    setIsAtBottom(true);
     const cached = readConversationCache(sessionId);
     if (cached) {
       setSelectedModel(cached.selectedModel);
@@ -419,9 +459,21 @@ export function ChatShell() {
     const imagesForRun = isAskAnswer ? [] : pendingImages;
     if (!token) return;
     if (!rawPrompt.trim() && imagesForRun.length === 0) return;
+
+    if (imagesForRun.some((image) => image.status === "uploading")) {
+      setError("图片仍在上传，请稍候");
+      return;
+    }
+    const readyImages = imagesForRun.filter((image) => image.status === "ready" && image.attachmentId);
+    if (!isAskAnswer && imagesForRun.length > 0 && readyImages.length === 0) {
+      setError("没有可发送的图片，请检查上传状态");
+      return;
+    }
+
     setError(undefined);
     stickToBottomRef.current = true;
-    const nextPrompt = rawPrompt.trim() || (imagesForRun.length > 0 ? "(image input)" : "");
+    setIsAtBottom(true);
+    const nextPrompt = rawPrompt.trim() || (readyImages.length > 0 ? "(image input)" : "");
     if (!overridePrompt) {
       setPrompt("");
       setPendingImages([]);
@@ -436,7 +488,7 @@ export function ChatShell() {
         setActiveSessionId(created.session.id);
       }
       const userMessageId = crypto.randomUUID();
-      const userImages = imagesForRun.map((image) => ({ dataUrl: image.dataUrl, name: image.name }));
+      const userImages = readyImages.map((image) => ({ dataUrl: image.previewUrl, name: image.name }));
       setMessages((current) => [
         ...current,
         {
@@ -450,11 +502,7 @@ export function ChatShell() {
         sessionId: session.id,
         prompt: nextPrompt,
         model: selectedModel,
-        images: imagesForRun.map((image) => ({
-          name: image.name,
-          mimeType: image.mimeType,
-          base64: image.base64
-        }))
+        attachmentIds: readyImages.map((image) => image.attachmentId!).filter(Boolean)
       });
       const runId = response.run.id as string;
       setActiveRunId(runId);
@@ -852,8 +900,22 @@ export function ChatShell() {
           )}
         </section>
 
-        <div className="composer-wrap">
-          {pendingAsk ? (
+        <div
+          className={`composer-wrap ${
+            !isAtBottom && messages.length > 0 && !pendingAsk ? "collapsed" : ""
+          }`}
+        >
+          {!isAtBottom && messages.length > 0 && !pendingAsk ? (
+            <button
+              type="button"
+              className="scroll-to-bottom"
+              aria-label="回到底部"
+              onClick={scrollChatToBottom}
+            >
+              <span>回到底部</span>
+              <span aria-hidden="true">↓</span>
+            </button>
+          ) : pendingAsk ? (
             <AskUserQuestionComposer
               pendingAsk={pendingAsk}
               selections={askSelections}
@@ -876,12 +938,14 @@ export function ChatShell() {
               {pendingImages.length > 0 ? (
                 <div className="composer-attachments">
                   {pendingImages.map((image) => (
-                    <div className="composer-attachment" key={image.id}>
-                      <img src={image.dataUrl} alt={image.name} />
+                    <div className={`composer-attachment ${image.status}`} key={image.localId}>
+                      <img src={image.previewUrl} alt={image.name} />
+                      {image.status === "uploading" ? <span className="attachment-spinner" /> : null}
+                      {image.status === "error" ? <span className="attachment-error">!</span> : null}
                       <button
                         type="button"
                         aria-label={`移除 ${image.name}`}
-                        onClick={() => removePendingImage(image.id)}
+                        onClick={() => removePendingImage(image.localId)}
                       >
                         ×
                       </button>
@@ -908,7 +972,7 @@ export function ChatShell() {
               <input
                 type="file"
                 ref={fileInputRef}
-                accept="image/png,image/jpeg,image/gif,image/webp"
+                accept="image/*"
                 multiple
                 style={{ display: "none" }}
                 onChange={(event) => {
@@ -957,7 +1021,6 @@ export function ChatShell() {
               </div>
             </form>
           )}
-          <div className="composer-note">OpenClaude 可能会出错。请核查重要信息。</div>
         </div>
       </main>
     </div>
@@ -981,21 +1044,16 @@ function ModelPicker({
   onSelectModel: (id: string) => void;
   onSetEffort: (modelId: string, effort: EffortLevel) => void;
 }) {
-  const [editingEffortModelId, setEditingEffortModelId] = useState<string | undefined>();
   const current = models.find((model) => model.id === selectedModel);
   const currentEffort = effortByModel[selectedModel] ?? "medium";
   const effortLabel = currentEffort.charAt(0).toUpperCase() + currentEffort.slice(1);
   const groups = groupModels(models);
 
-  useEffect(() => {
-    if (!isOpen) setEditingEffortModelId(undefined);
-  }, [isOpen]);
-
   return (
     <div className="model-picker-wrap">
       <button className="model-picker-trigger" type="button" onClick={onToggle}>
         <span className="model-picker-label">{current?.label ?? selectedModel}</span>
-        {current?.supportsMultimodal ? <ImageIcon /> : null}
+        {current?.supportsMultimodal ? <span className="vision-badge">Vision</span> : null}
         {current?.supportsEffort ? <span className="effort-badge">{effortLabel}</span> : null}
         <span className="model-picker-chevron">{isOpen ? "▴" : "▾"}</span>
       </button>
@@ -1006,101 +1064,47 @@ function ModelPicker({
               <div className="model-group-title">{groupName}</div>
               {items.map((model) => {
                 const modelEffort = effortByModel[model.id] ?? "medium";
-                const isEditing = editingEffortModelId === model.id;
                 return (
-                  <div className="model-item-row" key={model.id}>
-                    <button
-                      className={`model-item ${model.id === selectedModel ? "active" : ""}`}
-                      type="button"
-                      onClick={() => onSelectModel(model.id)}
-                    >
-                      <span className="model-item-name">{model.label}</span>
-                      <span className="model-item-badges">
-                        {model.supportsMultimodal ? <ImageIcon /> : null}
+                  <button
+                    className={`model-item ${model.id === selectedModel ? "active" : ""}`}
+                    key={model.id}
+                    type="button"
+                    onClick={() => onSelectModel(model.id)}
+                  >
+                    <span className="model-item-name">{model.label}</span>
+                    <span className="model-item-badges">
+                      {model.supportsMultimodal ? <span className="vision-badge">Vision</span> : null}
+                    </span>
+                    {model.supportsEffort ? (
+                      <span
+                        className="effort-segmented"
+                        role="group"
+                        aria-label="Effort"
+                        onClick={(event) => event.stopPropagation()}
+                      >
+                        {(["low", "medium", "high"] as EffortLevel[]).map((level) => (
+                          <button
+                            className={modelEffort === level ? "active" : ""}
+                            key={level}
+                            type="button"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              onSetEffort(model.id, level);
+                            }}
+                          >
+                            {level.charAt(0).toUpperCase()}
+                          </button>
+                        ))}
                       </span>
-                      {model.supportsEffort ? (
-                        <button
-                          className={`effort-edit-button ${isEditing ? "active" : ""}`}
-                          type="button"
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            setEditingEffortModelId(isEditing ? undefined : model.id);
-                          }}
-                        >
-                          {modelEffort.charAt(0).toUpperCase() + modelEffort.slice(1)}
-                        </button>
-                      ) : null}
-                      {model.id === selectedModel ? <span className="model-check">✓</span> : null}
-                    </button>
-                    {isEditing ? (
-                      <EffortSlider
-                        value={modelEffort}
-                        onChange={(level) => onSetEffort(model.id, level)}
-                        onClose={() => setEditingEffortModelId(undefined)}
-                      />
                     ) : null}
-                  </div>
+                    {model.id === selectedModel ? <span className="model-check">✓</span> : null}
+                  </button>
                 );
               })}
             </div>
           ))}
         </div>
       ) : null}
-    </div>
-  );
-}
-
-function EffortSlider({
-  value,
-  onChange,
-  onClose
-}: {
-  value: EffortLevel;
-  onChange: (level: EffortLevel) => void;
-  onClose: () => void;
-}) {
-  const containerRef = useRef<HTMLDivElement | null>(null);
-  const levels: EffortLevel[] = ["low", "medium", "high"];
-  const sliderIndex = levels.indexOf(value);
-
-  useEffect(() => {
-    function onDocumentClick(event: MouseEvent) {
-      if (!containerRef.current) return;
-      if (!containerRef.current.contains(event.target as Node)) {
-        onClose();
-      }
-    }
-    document.addEventListener("mousedown", onDocumentClick);
-    return () => document.removeEventListener("mousedown", onDocumentClick);
-  }, [onClose]);
-
-  return (
-    <div className="effort-slider-popover" ref={containerRef}>
-      <div className="effort-slider-title">Effort</div>
-      <input
-        className="effort-slider-input"
-        type="range"
-        min={0}
-        max={2}
-        step={1}
-        value={sliderIndex}
-        onChange={(event) => {
-          const next = levels[Number(event.target.value)];
-          if (next) onChange(next);
-        }}
-      />
-      <div className="effort-slider-labels">
-        {levels.map((level) => (
-          <button
-            className={`effort-slider-label ${value === level ? "active" : ""}`}
-            key={level}
-            type="button"
-            onClick={() => onChange(level)}
-          >
-            {level.charAt(0).toUpperCase()}{level.slice(1)}
-          </button>
-        ))}
-      </div>
     </div>
   );
 }
@@ -1114,16 +1118,6 @@ function groupModels(models: ModelOption[]): Array<[string, ModelOption[]]> {
     groupMap.set(name, list);
   }
   return [...groupMap.entries()];
-}
-
-function ImageIcon() {
-  return (
-    <svg className="model-badge-icon" aria-label="Supports images" viewBox="0 0 20 20" width="14" height="14">
-      <rect x="2" y="3" width="16" height="14" rx="2" fill="none" stroke="currentColor" strokeWidth="1.5" />
-      <circle cx="7" cy="8" r="1.5" fill="currentColor" />
-      <path d="M4 15l4-5 3 3.5 2-2 3 3.5" fill="none" stroke="currentColor" strokeWidth="1.3" strokeLinejoin="round" />
-    </svg>
-  );
 }
 
 function TrashIcon() {
@@ -1297,13 +1291,24 @@ function numberOrUndefined(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) ? value : undefined;
 }
 
-function readFileAsDataUrl(file: File): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(reader.result as string);
-    reader.onerror = () => reject(reader.error ?? new Error("Failed to read file"));
-    reader.readAsDataURL(file);
-  });
+function guessMimeFromName(name: string): string {
+  const ext = name.toLowerCase().split(".").pop() ?? "";
+  switch (ext) {
+    case "jpg":
+    case "jpeg":
+      return "image/jpeg";
+    case "png":
+      return "image/png";
+    case "gif":
+      return "image/gif";
+    case "webp":
+      return "image/webp";
+    case "heic":
+    case "heif":
+      return "image/heic";
+    default:
+      return "";
+  }
 }
 
 function formatNumber(value: number) {

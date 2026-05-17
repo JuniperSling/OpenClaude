@@ -114,26 +114,7 @@ export const createRunRequestSchema = z.object({
   sessionId: z.string().min(1),
   prompt: z.string().min(1),
   model: modelIdSchema.optional(),
-  attachments: z
-    .array(
-      z.object({
-        workspaceFilePath: z.string().min(1),
-        mimeType: z.string().optional(),
-        sizeBytes: z.number().nonnegative().optional(),
-        kind: z.enum(["image", "file"]).optional()
-      })
-    )
-    .optional(),
-  images: z
-    .array(
-      z.object({
-        name: z.string().optional(),
-        mimeType: z.string().min(1),
-        base64: z.string().min(1)
-      })
-    )
-    .max(8)
-    .optional()
+  attachmentIds: z.array(z.string().min(1)).max(8).optional()
 });
 
 export type CreateRunRequest = z.infer<typeof createRunRequestSchema>;

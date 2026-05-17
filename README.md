@@ -6,8 +6,8 @@ OpenClaude is a self-hosted, Claude-like agent workspace built on top of the [Cl
 
 - **Real Claude Agent runtime** — wraps `@anthropic-ai/claude-agent-sdk`'s `query()` with `includePartialMessages`, persistent SDK session storage, and `resume`-based multi-turn context.
 - **OpenRouter routing** — Claude Sonnet / Opus and DeepSeek V4 (Flash / Pro) are exposed through the same SDK, with per-model effort (Low / Medium / High) for the Claude family.
-- **Streaming UI** — WebSocket envelopes power live text deltas, tool-use cards (with arguments and results), `view`/`raw` toggle on assistant turns, and per-turn token / cost metadata.
-- **Multimodal input** — drag-and-drop, paste, or file-pick images directly in the composer. Images are stored under the workspace `uploads/` and forwarded as Claude `image` content blocks.
+- **Streaming UI** — WebSocket envelopes power live text deltas, tool-use cards (with arguments and results), `view`/`raw` toggle on assistant turns, per-turn token / cost metadata, and a composer that collapses into a "back to bottom" pill while you scroll up to read history.
+- **Multimodal input** — drag-and-drop, paste, or file-pick images directly in the composer. The browser uploads them as multipart/form-data (so iOS Safari can transparently transcode HEIC to JPEG before upload), the API stages them under the user's directory, and they are moved into the workspace on run start and forwarded as Claude `image` content blocks.
 - **AskUserQuestion bridge** — when the agent calls the SDK's `AskUserQuestion` tool, the run pauses and the composer turns into a multiple-choice / free-form panel; the answer is fed back as the next user message.
 - **Workspace-scoped state** — every session has a persistent workspace, shared user `HOME`, and dedicated SDK session storage so dependency caches survive across runs.
 - **SQLite-backed history** — sessions, runs, raw event archive, and lightweight `messages` summaries live in a single SQLite database. The browser caches loaded conversations in `sessionStorage` to keep switching instant.

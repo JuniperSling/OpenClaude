@@ -92,7 +92,7 @@ Multi-turn context: the first SDK `system init` event yields a `session_id` whic
 Entry: `apps/api/src/server.ts`. Responsibilities:
 
 - Boots Express + HTTP server, instantiates the SQLite-backed `FileStore` and `RunRegistry`, and chooses between `ClaudeAgentRuntime` and `MockAgentRuntime` based on env.
-- Configures CORS, JSON body limit (30MB so inline base64 images fit), and `trust proxy` for correct IPs behind Nginx.
+- Configures CORS, a small JSON body limit (1MB — large blobs are uploaded via multipart, not inline base64), and `trust proxy` for correct IPs behind Nginx.
 - Login endpoint with per-(IP, username) failure tracking and progressive lockout windows (1m → 5m → 15m).
 - Generates session titles asynchronously after the first user prompt by calling OpenRouter's chat completions with `anthropic/claude-haiku-4.5`.
 
@@ -107,7 +107,8 @@ HTTP endpoints currently served:
 - `DELETE /api/sessions/:sessionId` (rejects if there is an active run)
 - `GET /api/sessions/:sessionId/history` — returns `messages` summary + `runMeta` (token/cost/raw text per run)
 - `GET /api/runs/:runId`
-- `POST /api/runs` — accepts inline `images: [{ name?, mimeType, base64 }]`; saved to `workspaces/{id}/uploads/{uuid}.{ext}` and added to `RunInput.attachments`
+- `POST /api/uploads` — multipart/form-data (`files` field, up to 8 images, ≤25MB each, MIME must start with `image/`). Saved to `users/{userId}/staging/{uuid}{ext}` via multer disk storage; returns `{ uploads: [{ id, mimeType, name, sizeBytes }] }`. The `id` is opaque and only valid for the same user.
+- `POST /api/runs` — accepts `attachmentIds: string[]`. The server validates each id has no path separators, then `rename()`s the staged file into `workspaces/{id}/uploads/` and records it on `RunInput.attachments`. Inline base64 has been removed.
 - `DELETE /api/runs/:runId`
 
 WebSocket `/ws` (in `RunRegistry.attach`):
@@ -166,10 +167,11 @@ Features as of today:
 - Sidebar with session list, hover-only red trash icon (no confirm dialog), bottom-left logout, and admin avatar.
 - Per-session conversation cache in memory + `sessionStorage` so re-opening a session is instant.
 - Composer:
-  - Drag-and-drop, paste, and `+` button accept up to 8 images (PNG/JPEG/GIF/WebP, ≤ 10MB each).
-  - Thumbnails appear above the textarea and can be removed individually.
+  - Drag-and-drop, paste, and `+` button accept up to 8 images via the native file picker (`accept="image/*"`). On iOS Safari this lets the OS auto-convert HEIC/HEIF to JPEG before the file leaves the device.
+  - Selected images upload immediately via `POST /api/uploads` (multipart/form-data, no base64). Thumbnails use `URL.createObjectURL`; per-thumbnail spinner / error indicator reflects the upload state. The send button is enabled only when every pending image is `ready`.
+  - When the user scrolls up to read history, the composer collapses into a small "回到底部" pill at the bottom; tapping it (or scrolling back to the bottom) restores the full composer.
   - When a run is active, the send button becomes a red stop button; clicking it closes the WebSocket message and surfaces a `Stopped by user` state on any in-flight tool cards.
-  - Custom model picker popover with grouped models, multimodal icon, and a per-model effort slider (popover opens to the right of each row).
+  - Custom model picker popover with grouped models, an inline `Vision` pill for multimodal models, and an inline `[L|M|H]` segmented control for per-model effort.
 - Streaming output:
   - Frontend buffers SDK text deltas and emits a small typewriter pacing so the rendering feels smoother.
   - Auto-scroll only sticks if the user is within ~80px of the bottom; scrolling up to read history is not interrupted.
@@ -209,8 +211,9 @@ Defined in `packages/sandbox/src/index.ts`. For each `(userId, workspaceId)`:
 {OPENCLAUDE_DATA_DIR}/users/{userId}/
   home/                          # Agent HOME (persistent caches, tool installs)
   claude/                        # CLAUDE_CONFIG_DIR (SDK session/config storage)
+  staging/                       # Multipart uploads (pre-run); files renamed into a workspace upon POST /api/runs
   workspaces/{workspaceId}/
-    uploads/                     # User-uploaded images (paths referenced by RunInput.attachments)
+    uploads/                     # User-uploaded images attached to a run
     files/                       # General workspace files
     .claude/skills/              # Skill projections (future)
 ```

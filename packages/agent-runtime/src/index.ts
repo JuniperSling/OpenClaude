@@ -60,10 +60,17 @@ export class ClaudeAgentRuntime implements AgentRuntime {
     const wallClockTimeoutMs = this.options.wallClockTimeoutMs ?? 10 * 60 * 1000;
     const timeout = setTimeout(() => controller.abort(), wallClockTimeoutMs);
 
-    const imageAttachments =
+    const candidateImageAttachments =
       input.attachments?.filter(
         (attachment) => attachment.kind === "image" && attachment.mimeType && SUPPORTED_IMAGE_MIME.has(attachment.mimeType)
       ) ?? [];
+
+    const imageAttachments = model.supportsMultimodal ? candidateImageAttachments : [];
+    if (!model.supportsMultimodal && candidateImageAttachments.length > 0) {
+      console.warn(
+        `Model ${model.id} does not support multimodal input; dropping ${candidateImageAttachments.length} image attachment(s).`
+      );
+    }
 
     const promptInput: string | AsyncIterable<SDKUserMessage> =
       imageAttachments.length > 0
