@@ -1,0 +1,25 @@
+{
+  "name": "openclaude",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "npm run build:packages && npm-run-all --parallel dev:api dev:web",
+    "dev:api": "npm --workspace @openclaude/api run dev",
+    "dev:web": "npm --workspace @openclaude/web run dev",
+    "build:packages": "npm --workspace @openclaude/shared run build && npm --workspace @openclaude/model-registry run build && npm --workspace @openclaude/sandbox run build && npm --workspace @openclaude/agent-runtime run build",
+    "build": "npm run build:packages && npm --workspace @openclaude/api run build && npm --workspace @openclaude/web run build",
+    "typecheck": "npm run build:packages && npm run typecheck --workspaces --if-present",
+    "lint": "npm run lint --workspaces --if-present"
+  },
+  "devDependencies": {
+    "@types/node": "latest",
+    "npm-run-all": "latest",
+    "tsx": "latest",
+    "typescript": "latest"
+  }
+}

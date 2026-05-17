@@ -1,0 +1,45 @@
+services:
+  api:
+    build:
+      context: ..
+      target: api
+    env_file:
+      - ../.env
+    environment:
+      API_HOST: 0.0.0.0
+      API_PORT: 4000
+      OPENCLAUDE_DATA_DIR: /srv/openclaude
+      CORS_ORIGIN: http://localhost:3000
+    ports:
+      - "4000:4000"
+    volumes:
+      - openclaude-data:/srv/openclaude
+
+  web:
+    build:
+      context: ..
+      target: web
+    env_file:
+      - ../.env
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: http://localhost:4000
+      NEXT_PUBLIC_WS_BASE_URL: ws://localhost:4000/ws
+    ports:
+      - "3000:3000"
+    depends_on:
+      - api
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: openclaude
+      POSTGRES_USER: openclaude
+      POSTGRES_PASSWORD: openclaude_dev_password
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    profiles:
+      - postgres
+
+volumes:
+  openclaude-data:
+  postgres-data:
