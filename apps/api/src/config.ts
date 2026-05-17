@@ -9,7 +9,7 @@ export const config = {
   host: process.env.API_HOST ?? "0.0.0.0",
   port: Number(process.env.API_PORT ?? 4000),
   jwtSecret: process.env.JWT_SECRET ?? "dev-secret",
-  adminUsername: process.env.ADMIN_USERNAME ?? "admin",
+  adminUsername: process.env.ADMIN_USERNAME ?? "Milagro",
   adminPassword: process.env.ADMIN_PASSWORD ?? "change-me-before-deploy",
   dataDir: path.resolve(rootDir, process.env.OPENCLAUDE_DATA_DIR ?? ".openclaude"),
   runtimeMode: process.env.AGENT_RUNTIME_MODE ?? (process.env.OPENROUTER_API_KEY ? "claude" : "mock"),

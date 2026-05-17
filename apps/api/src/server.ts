@@ -1,5 +1,5 @@
 import http from "node:http";
-import { mkdir, rename, stat } from "node:fs/promises";
+import { mkdir, readFile, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import cors from "cors";
 import express from "express";
@@ -308,7 +308,7 @@ app.post("/api/runs", async (request, response, next) => {
     response.status(202).json({ run });
 
     if (isFirstRunInSession && shouldGenerateTitle(session.title)) {
-      void generateSessionTitle(parsed.data.prompt)
+      void generateSessionTitle(parsed.data.prompt, attachments)
         .then(async (title) => {
           if (!title) return;
           const latest = store.getSession(session.id);
@@ -371,8 +371,53 @@ function shouldGenerateTitle(title: string) {
   return title.trim().length === 0 || title.trim().toLowerCase() === "new chat";
 }
 
-async function generateSessionTitle(prompt: string): Promise<string | undefined> {
+type TitleAttachment = {
+  workspaceFilePath: string;
+  mimeType?: string;
+  kind?: "image" | "file";
+};
+
+const TITLE_VISION_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/gif", "image/webp"]);
+const TITLE_MAX_IMAGES = 3;
+const TITLE_MAX_IMAGE_BYTES = 2 * 1024 * 1024;
+
+async function generateSessionTitle(
+  prompt: string,
+  attachments: TitleAttachment[] = []
+): Promise<string | undefined> {
   if (!config.openRouterApiKey) return undefined;
+
+  const imageBlocks: Array<{ type: "image_url"; image_url: { url: string } }> = [];
+  for (const attachment of attachments) {
+    if (imageBlocks.length >= TITLE_MAX_IMAGES) break;
+    if (attachment.kind !== "image") continue;
+    if (!attachment.mimeType || !TITLE_VISION_MIME_TYPES.has(attachment.mimeType)) continue;
+    try {
+      const info = await stat(attachment.workspaceFilePath);
+      if (info.size > TITLE_MAX_IMAGE_BYTES) continue;
+      const buffer = await readFile(attachment.workspaceFilePath);
+      imageBlocks.push({
+        type: "image_url",
+        image_url: { url: `data:${attachment.mimeType};base64,${buffer.toString("base64")}` }
+      });
+    } catch (error) {
+      console.warn("Failed to read image for title generation", attachment.workspaceFilePath, error);
+    }
+  }
+
+  const trimmedPrompt = prompt.trim();
+  const userContent: Array<
+    | { type: "text"; text: string }
+    | { type: "image_url"; image_url: { url: string } }
+  > = [];
+  if (trimmedPrompt && trimmedPrompt !== "(image input)") {
+    userContent.push({ type: "text", text: trimmedPrompt.slice(0, 2000) });
+  } else if (imageBlocks.length === 0) {
+    userContent.push({ type: "text", text: trimmedPrompt.slice(0, 2000) });
+  }
+  for (const block of imageBlocks) userContent.push(block);
+  if (userContent.length === 0) return undefined;
+
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 12_000);
   try {
@@ -388,12 +433,9 @@ async function generateSessionTitle(prompt: string): Promise<string | undefined>
           {
             role: "system",
             content:
-              "Generate a concise conversation title. Return only the title, no quotes, no punctuation at the end. Use the same language as the user when possible. Maximum 8 Chinese characters or 5 English words."
+              "You write concise titles for chat conversations. Read the user's first message — including any attached images — and return ONLY the title text, with no quotes and no trailing punctuation. Match the user's language. Limit: 8 Chinese characters or 5 English words. If the message is mostly an image, summarise the image content."
           },
-          {
-            role: "user",
-            content: prompt.slice(0, 2000)
-          }
+          { role: "user", content: userContent }
         ],
         temperature: 0.2,
         max_tokens: 32
@@ -405,9 +447,19 @@ async function generateSessionTitle(prompt: string): Promise<string | undefined>
       return undefined;
     }
     const payload = (await response.json()) as {
-      choices?: Array<{ message?: { content?: string } }>;
+      choices?: Array<{ message?: { content?: string | Array<{ type?: string; text?: string }> } }>;
     };
-    return sanitizeTitle(payload.choices?.[0]?.message?.content);
+    const raw = payload.choices?.[0]?.message?.content;
+    const text =
+      typeof raw === "string"
+        ? raw
+        : Array.isArray(raw)
+          ? raw
+              .filter((block) => block.type === "text" && typeof block.text === "string")
+              .map((block) => block.text!)
+              .join("")
+          : undefined;
+    return sanitizeTitle(text);
   } finally {
     clearTimeout(timeout);
   }

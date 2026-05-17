@@ -88,7 +88,10 @@ function getWsBaseUrl() {
 export function ChatShell() {
   const [token, setToken] = useState<string | undefined>();
   const [authInitialized, setAuthInitialized] = useState(false);
-  const [username, setUsername] = useState("admin");
+  const [username, setUsername] = useState(() => {
+    const fromEnv = process.env.NEXT_PUBLIC_ADMIN_USERNAME?.trim();
+    return fromEnv && fromEnv.length > 0 ? fromEnv : "Milagro";
+  });
   const [password, setPassword] = useState("");
   const [sessions, setSessions] = useState<SessionWithWorkspace[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | undefined>();
@@ -127,6 +130,8 @@ export function ChatShell() {
   useEffect(() => {
     const saved = window.localStorage.getItem("openclaude.token");
     if (saved) setToken(saved);
+    const savedUsername = window.localStorage.getItem("openclaude.username");
+    if (savedUsername) setUsername(savedUsername);
     setAuthInitialized(true);
     void getModels()
       .then((result) => {
@@ -188,6 +193,8 @@ export function ChatShell() {
     try {
       const result = await login(username, password);
       window.localStorage.setItem("openclaude.token", result.token);
+      window.localStorage.setItem("openclaude.username", result.user.username);
+      setUsername(result.user.username);
       setToken(result.token);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -356,6 +363,7 @@ export function ChatShell() {
 
   function handleLogout() {
     window.localStorage.removeItem("openclaude.token");
+    window.localStorage.removeItem("openclaude.username");
     clearAllConversationCaches();
     setToken(undefined);
     setActiveSessionId(undefined);
