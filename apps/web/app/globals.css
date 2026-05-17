@@ -32,6 +32,7 @@
 body {
   margin: 0;
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--page);
   color: var(--text);
   font-family:
@@ -57,6 +58,7 @@ button {
   display: grid;
   grid-template-columns: 268px minmax(0, 1fr);
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--page);
 }
 
@@ -70,6 +72,7 @@ button {
   display: flex;
   flex-direction: column;
   height: 100vh;
+  height: 100dvh;
   background: var(--sidebar);
   border-right: 1px solid rgba(216, 206, 192, 0.7);
   padding: 12px;
@@ -238,6 +241,7 @@ button {
   display: grid;
   grid-template-rows: 56px minmax(0, 1fr) auto;
   height: 100vh;
+  height: 100dvh;
   min-width: 0;
 }
 

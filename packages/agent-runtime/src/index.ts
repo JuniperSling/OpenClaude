@@ -85,7 +85,8 @@ export class ClaudeAgentRuntime implements AgentRuntime {
           sdkSessionStoragePath: input.sdkSessionStoragePath,
           workspaceRoot: input.workspaceRoot,
           sessionId: input.resumeSessionId,
-          targetOpenRouterModel: model.openRouterModel
+          targetOpenRouterModel: model.openRouterModel,
+          targetSupportsMultimodal: model.supportsMultimodal
         });
       } catch (error) {
         console.warn("Failed to sanitize transcript for cross-model resume", error);
@@ -313,11 +314,11 @@ function sdkTranscriptPath(sdkSessionStoragePath: string, workspaceRoot: string,
   return path.join(sdkSessionStoragePath, "projects", encodedCwd, `${sessionId}.jsonl`);
 }
 
-type AssistantContentBlock = { type?: string; [key: string]: unknown };
+type ContentBlock = { type?: string; [key: string]: unknown };
 
 type SdkTranscriptEvent = {
   type?: string;
-  message?: { model?: string; content?: AssistantContentBlock[] };
+  message?: { role?: string; model?: string; content?: ContentBlock[] | string };
 };
 
 function sanitizeTranscriptForCrossModelResume(args: {
@@ -325,6 +326,7 @@ function sanitizeTranscriptForCrossModelResume(args: {
   workspaceRoot: string;
   sessionId: string;
   targetOpenRouterModel: string;
+  targetSupportsMultimodal: boolean;
 }): void {
   const transcriptPath = sdkTranscriptPath(args.sdkSessionStoragePath, args.workspaceRoot, args.sessionId);
   if (!existsSync(transcriptPath)) return;
@@ -342,14 +344,34 @@ function sanitizeTranscriptForCrossModelResume(args: {
     } catch {
       return line;
     }
-    if (event.type !== "assistant" || !event.message || !Array.isArray(event.message.content)) return line;
-    const sourceProvider = providerFromOpenRouterModel(event.message.model);
-    if (sourceProvider === targetProvider || sourceProvider === "unknown") return line;
-    const filtered = event.message.content.filter(
-      (block) => typeof block?.type === "string" && !CROSS_MODEL_INCOMPATIBLE_BLOCK_TYPES.has(block.type)
-    );
-    if (filtered.length === event.message.content.length) return line;
-    event.message.content = filtered;
+    if (!event.message || !Array.isArray(event.message.content)) return line;
+
+    const original = event.message.content;
+    let updated: ContentBlock[] = original;
+
+    if (event.type === "assistant") {
+      const sourceProvider = providerFromOpenRouterModel(event.message.model);
+      if (sourceProvider !== targetProvider && sourceProvider !== "unknown") {
+        updated = updated.filter(
+          (block) => typeof block?.type === "string" && !CROSS_MODEL_INCOMPATIBLE_BLOCK_TYPES.has(block.type)
+        );
+      }
+    }
+
+    if (!args.targetSupportsMultimodal) {
+      updated = updated.map((block) => {
+        if (block?.type === "image") {
+          return { type: "text", text: "[image attached in previous turn — omitted because the current model does not support image input]" };
+        }
+        return block;
+      });
+    }
+
+    if (updated === original) return line;
+    if (updated.length === 0) {
+      updated = [{ type: "text", text: "[content omitted for cross-model resume]" }];
+    }
+    event.message.content = updated;
     changed = true;
     return JSON.stringify(event);
   });
