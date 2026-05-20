@@ -302,12 +302,13 @@ export function ChatShell() {
     const el = event.currentTarget;
     const distance = el.scrollHeight - el.scrollTop - el.clientHeight;
     setIsAtBottom((current) => {
-      // Use hysteresis so the composer doesn't flicker around the threshold:
-      // once the user is "at bottom" we keep it that way until they scroll up
-      // a clear distance, and once they're scrolled up they need to scroll
-      // most of the way back before we re-attach.
-      const STAY_AT_BOTTOM_PX = 200;
-      const ENTER_BOTTOM_PX = 40;
+      // Hysteresis so the composer doesn't flicker around the threshold.
+      // The "leave bottom" threshold is generous and the "enter bottom"
+      // threshold needs to be lenient enough that wheel-scrolling near the
+      // bottom of a streaming chat reliably re-pins (scrollHeight is still
+      // growing while the user scrolls, so a tiny ENTER value is unreachable).
+      const STAY_AT_BOTTOM_PX = 240;
+      const ENTER_BOTTOM_PX = 120;
       const next = current ? distance <= STAY_AT_BOTTOM_PX : distance < ENTER_BOTTOM_PX;
       stickToBottomRef.current = next;
       return next;
