@@ -107,7 +107,7 @@ export class ClaudeAgentRuntime implements AgentRuntime {
           ...getOpenRouterDefaults(input.modelId)
         },
         model: model.sdkModel,
-        maxTurns: 20,
+        maxTurns: 60,
         includePartialMessages: true,
         tools: { type: "preset", preset: "claude_code" },
         permissionMode: "acceptEdits",
@@ -130,8 +130,7 @@ export class ClaudeAgentRuntime implements AgentRuntime {
             if (reason) {
               return {
                 behavior: "deny" as const,
-                message: reason,
-                interrupt: true
+                message: reason
               };
             }
           }
