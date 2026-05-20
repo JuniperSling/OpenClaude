@@ -144,26 +144,43 @@ export function WorkspacePanel({
   return (
     <aside className={`workspace-panel ${isOpen ? "open" : ""}`}>
       <header className="workspace-header">
-        <div>
-          <strong>Workspace</strong>
-          <small title={rootPath}>{rootPath ?? "正在加载路径..."}</small>
-          {uploadStatus ? (
-            <div className={`workspace-upload-status ${uploadStatus.kind}`}>
-              <span>{uploadStatus.message}</span>
-              {uploadStatus.percent !== undefined ? <span>{uploadStatus.percent}%</span> : null}
-              {uploadStatus.kind === "uploading" ? (
-                <div className="workspace-upload-bar">
-                  <span style={{ width: `${uploadStatus.percent ?? 12}%` }} />
-                </div>
-              ) : null}
-            </div>
-          ) : null}
-          {error ? <div className="workspace-error">{error}</div> : null}
+        <div className="workspace-header-row">
+          <div className="workspace-header-title">
+            <span className="wordmark">Workspace</span>
+            <small className="workspace-path" title={rootPath}>{rootPath ?? "正在加载路径..."}</small>
+          </div>
+          <div className="workspace-header-actions">
+            <button
+              className="icon-button"
+              type="button"
+              aria-label="上传文件"
+              title="上传文件"
+              onClick={() => startUpload("", "file")}
+            >
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 19V5" />
+                <path d="m5 12 7-7 7 7" />
+              </svg>
+            </button>
+            <button className="icon-button mobile-only" type="button" aria-label="关闭 Workspace" onClick={onClose}>
+              ×
+            </button>
+          </div>
         </div>
-        <button className="icon-button mobile-only" type="button" aria-label="关闭 Workspace" onClick={onClose}>
-          ×
-        </button>
+        {uploadStatus ? (
+          <div className={`workspace-upload-status ${uploadStatus.kind}`}>
+            <span>{uploadStatus.message}</span>
+            {uploadStatus.percent !== undefined ? <span>{uploadStatus.percent}%</span> : null}
+            {uploadStatus.kind === "uploading" ? (
+              <div className="workspace-upload-bar">
+                <span style={{ width: `${uploadStatus.percent ?? 12}%` }} />
+              </div>
+            ) : null}
+          </div>
+        ) : null}
+        {error ? <div className="workspace-error">{error}</div> : null}
       </header>
+      <div className="sidebar-section-title workspace-section-title">文件</div>
       <input
         ref={fileInputRef}
         type="file"

@@ -1,20 +1,26 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import type { WorkspaceFileNode } from "./api";
 
 export function MentionAutocomplete({
-  query,
-  files,
+  matches,
+  activeIndex,
+  onHoverIndex,
   onSelect
 }: {
-  query: string;
-  files: WorkspaceFileNode[];
+  matches: WorkspaceFileNode[];
+  activeIndex: number;
+  onHoverIndex: (index: number) => void;
   onSelect: (path: string) => void;
 }) {
-  const normalized = query.toLowerCase();
-  const matches = files
-    .filter((file) => file.path.toLowerCase().includes(normalized))
-    .slice(0, 8);
+  const listRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    if (!listRef.current || matches.length === 0) return;
+    const active = listRef.current.querySelector<HTMLElement>(".mention-option.active");
+    active?.scrollIntoView({ block: "nearest" });
+  }, [activeIndex, matches.length]);
 
   if (matches.length === 0) {
     return (
@@ -25,9 +31,16 @@ export function MentionAutocomplete({
   }
 
   return (
-    <div className="mention-popover">
-      {matches.map((file) => (
-        <button key={file.path} type="button" className="mention-option" onMouseDown={(event) => event.preventDefault()} onClick={() => onSelect(file.path)}>
+    <div className="mention-popover" ref={listRef}>
+      {matches.map((file, index) => (
+        <button
+          key={file.path}
+          type="button"
+          className={`mention-option ${index === activeIndex ? "active" : ""}`}
+          onMouseDown={(event) => event.preventDefault()}
+          onMouseEnter={() => onHoverIndex(index)}
+          onClick={() => onSelect(file.path)}
+        >
           <span>{file.name}</span>
           <small>{file.path}</small>
         </button>

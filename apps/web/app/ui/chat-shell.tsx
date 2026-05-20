@@ -138,9 +138,12 @@ export function ChatShell() {
   const [isDragging, setIsDragging] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState<WorkspaceFileNode | undefined>();
   const [workspaceRootPath, setWorkspaceRootPath] = useState<string | undefined>();
-  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
+  // Workspace defaults closed; an effect opens it on desktop after mount so
+  // the chat area is not covered on mobile during the initial paint.
+  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(false);
   const [fileRefs, setFileRefs] = useState<FileReferenceBlock[]>([]);
   const [mentionState, setMentionState] = useState<MentionState | undefined>();
+  const [mentionActiveIndex, setMentionActiveIndex] = useState(0);
   const [workspaceUploadStatus, setWorkspaceUploadStatus] = useState<WorkspaceUploadStatus | undefined>();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -160,6 +163,17 @@ export function ChatShell() {
     [activeSessionId, sessions]
   );
   const workspaceFiles = useMemo(() => flattenWorkspaceFiles(workspaceRoot), [workspaceRoot]);
+  const mentionMatches = useMemo(() => {
+    if (!mentionState) return [];
+    const normalized = mentionState.query.toLowerCase();
+    return workspaceFiles
+      .filter((file) => file.path.toLowerCase().includes(normalized))
+      .slice(0, 8);
+  }, [mentionState, workspaceFiles]);
+
+  useEffect(() => {
+    setMentionActiveIndex(0);
+  }, [mentionState?.query, mentionState?.start]);
 
   useEffect(() => {
     const saved = window.localStorage.getItem("openclaude.token");
@@ -179,6 +193,13 @@ export function ChatShell() {
     return () => {
       clearTextQueues();
     };
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined" || !window.matchMedia) return;
+    if (window.matchMedia("(min-width: 861px)").matches) {
+      setIsWorkspaceOpen(true);
+    }
   }, []);
 
   const refreshSessions = useCallback(async () => {
@@ -404,6 +425,25 @@ export function ChatShell() {
     setFileRefs((current) => [...current, { id: crypto.randomUUID(), path, prefix }]);
     setMentionState(undefined);
     requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
+  function triggerMentionFromButton() {
+    const textarea = textareaRef.current;
+    const currentCursor = textarea?.selectionStart ?? prompt.length;
+    const before = prompt.slice(0, currentCursor);
+    const after = prompt.slice(currentCursor);
+    const needsLeadingSpace = before.length > 0 && !/\s$/.test(before);
+    const insertion = `${needsLeadingSpace ? " " : ""}@`;
+    const nextValue = `${before}${insertion}${after}`;
+    const atIndex = before.length + insertion.length - 1;
+    const newCursor = atIndex + 1;
+    setPrompt(nextValue);
+    setMentionState({ start: atIndex, end: newCursor, query: "" });
+    setMentionActiveIndex(0);
+    requestAnimationFrame(() => {
+      textarea?.focus();
+      textarea?.setSelectionRange(newCursor, newCursor);
+    });
   }
 
   function removeFileReference(id: string) {
@@ -1033,8 +1073,23 @@ export function ChatShell() {
             </button>
             <button className="conversation-title">{activeSession?.title ?? "New chat"}</button>
           </div>
-          <button className="ghost-button workspace-toggle" type="button" onClick={() => setIsWorkspaceOpen((open) => !open)}>
-            Workspace
+          <button
+            className="ghost-button workspace-toggle"
+            type="button"
+            aria-label="Workspace"
+            onClick={() =>
+              setIsWorkspaceOpen((open) => {
+                const next = !open;
+                if (next) setIsSidebarOpen(false);
+                return next;
+              })
+            }
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <rect x="3" y="3" width="18" height="18" rx="2" />
+              <path d="M15 3v18" />
+            </svg>
+            <span className="workspace-toggle-label">Workspace</span>
           </button>
         </header>
 
@@ -1205,6 +1260,31 @@ export function ChatShell() {
                   onChange={(event) => handlePromptChange(event.target.value, event.target.selectionStart)}
                   onPaste={handleComposerPaste}
                   onKeyDown={(event) => {
+                    if (mentionState && mentionMatches.length > 0) {
+                      if (event.key === "ArrowDown") {
+                        event.preventDefault();
+                        setMentionActiveIndex((current) => (current + 1) % mentionMatches.length);
+                        return;
+                      }
+                      if (event.key === "ArrowUp") {
+                        event.preventDefault();
+                        setMentionActiveIndex(
+                          (current) => (current - 1 + mentionMatches.length) % mentionMatches.length
+                        );
+                        return;
+                      }
+                      if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+                        event.preventDefault();
+                        const path = mentionMatches[mentionActiveIndex]?.path;
+                        if (path) insertFileReference(path);
+                        return;
+                      }
+                      if (event.key === "Escape") {
+                        event.preventDefault();
+                        setMentionState(undefined);
+                        return;
+                      }
+                    }
                     if (event.key === "Enter" && !event.shiftKey) {
                       event.preventDefault();
                       void submitPrompt();
@@ -1224,7 +1304,12 @@ export function ChatShell() {
                 />
               </div>
               {mentionState ? (
-                <MentionAutocomplete query={mentionState.query} files={workspaceFiles} onSelect={insertFileReference} />
+                <MentionAutocomplete
+                  matches={mentionMatches}
+                  activeIndex={mentionActiveIndex}
+                  onHoverIndex={setMentionActiveIndex}
+                  onSelect={insertFileReference}
+                />
               ) : null}
               <input
                 type="file"
@@ -1240,14 +1325,33 @@ export function ChatShell() {
                 }}
               />
               <div className="composer-footer">
-                <button
-                  className="round-button"
-                  type="button"
-                  aria-label="添加图片"
-                  onClick={() => fileInputRef.current?.click()}
-                >
-                  +
-                </button>
+                <div className="composer-actions">
+                  <button
+                    className="round-button"
+                    type="button"
+                    aria-label="添加图片"
+                    title="添加图片"
+                    onClick={() => fileInputRef.current?.click()}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <rect x="3" y="3" width="18" height="18" rx="3" ry="3" />
+                      <circle cx="9" cy="9" r="1.6" />
+                      <path d="m21 15-4.2-4.2a2 2 0 0 0-2.8 0L4 21" />
+                    </svg>
+                  </button>
+                  <button
+                    className="round-button"
+                    type="button"
+                    aria-label="引用 Workspace 文件"
+                    title="引用 Workspace 文件"
+                    onClick={triggerMentionFromButton}
+                  >
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                      <circle cx="12" cy="12" r="4" />
+                      <path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-3.92 7.94" />
+                    </svg>
+                  </button>
+                </div>
                 <ModelPicker
                   models={models}
                   selectedModel={selectedModel}
