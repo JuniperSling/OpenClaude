@@ -25,7 +25,7 @@ apps/
 packages/
   shared/               # Cross-cutting types + Zod request schemas + SDK→UI hint helpers
   agent-runtime/        # Claude Agent SDK wrapper + mock runtime + multimodal prompt builder
-  sandbox/              # Local workspace layout, path guard, Bash deny list, skill projection
+  sandbox/              # Local workspace layout, path guard, skill projection
   model-registry/       # Catalogue of Claude / DeepSeek models + OpenRouter env mapping
 infra/
   compose.yaml          # Early Docker Compose skeleton (not used in production today)
@@ -132,8 +132,8 @@ Entry: `packages/agent-runtime/src/index.ts`.
 - `ANTHROPIC_AUTH_TOKEN` = `OPENROUTER_API_KEY`
 - `model` = SDK alias (`sonnet`, `opus`, ...) — the actual upstream model is selected via `ANTHROPIC_DEFAULT_*_MODEL` env vars derived from the model registry
 - `tools = { type: "preset", preset: "claude_code" }`
-- `permissionMode = "acceptEdits"`, `maxTurns = 20`, `includePartialMessages: true`
-- `canUseTool` denies risky Bash patterns and pauses runs when the agent calls `AskUserQuestion`, returning `{ behavior: "deny", interrupt: true }` so the front-end can collect a real answer and re-run.
+- `permissionMode = "bypassPermissions"`, `allowDangerouslySkipPermissions: true`, `maxTurns = 60`, `includePartialMessages: true`
+- `canUseTool` only pauses runs when the agent calls `AskUserQuestion`, returning `{ behavior: "deny", interrupt: true }` so the front-end can collect a real answer and re-run. OpenClaude no longer applies a custom Bash deny list.
 
 When the run has `image` attachments, the runtime builds an `AsyncIterable<SDKUserMessage>` instead of a plain string prompt. The user message contains `text` + `image` content blocks where the image source is `{ type: "base64", media_type, data }`, matching the Anthropic SDK's `Base64ImageSource` shape.
 
@@ -221,7 +221,7 @@ Defined in `packages/sandbox/src/index.ts`. For each `(userId, workspaceId)`:
     .claude/skills/              # Skill projections (future)
 ```
 
-Path guards (`WorkspacePathGuard`) reject anything escaping the workspace root. The Bash deny list blocks `rm -rf`, `sudo`, `curl`, `wget`, `ssh`, `scp`, `dd`, `mkfs`, `chmod 777`, and any command containing `..`.
+Path guards (`WorkspacePathGuard`) reject API file operations that escape the workspace root. Agent Bash execution now uses SDK `bypassPermissions` without an OpenClaude-specific command deny list.
 
 This is an **organisation** boundary, not a security one. Treat the workspace as trusted user space; for untrusted multi-tenant operation, layer on per-user UNIX uid or per-user containers.
 
@@ -335,7 +335,7 @@ Authentication / multi-user:
 Sandbox / security:
 
 - `cwd` is not a security boundary. For untrusted users, swap the `LocalWorkspaceManager` for per-user containers or UNIX uid handoff.
-- Bash deny list is intentionally short. Tighten it (or move to allowlist) before opening up.
+- Agent Bash execution is intentionally permissive for this single-admin deployment. Add per-user containers or UNIX uid isolation before opening it to untrusted users.
 
 Operational:
 

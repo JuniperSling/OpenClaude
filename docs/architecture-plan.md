@@ -284,9 +284,8 @@ MVP 可以只有一个管理员账号，但仍使用 users 表。
 
 - 服务器部署采用每用户独立 UNIX uid，或优先采用长生命周期 per-user dev container。容器挂载该用户的 `home/`、`claude/` 和 `workspaces/`，不挂载项目外敏感路径。
 - 运行前固定 `cwd` 到 workspace root。
-- `canUseTool` 中对 Bash 命令做基础拦截。
+- Bash 当前走 SDK `bypassPermissions`，不再做 OpenClaude 自定义命令拦截；后续安全边界应优先落到独立 UNIX uid / container / 文件系统隔离。
 - 文件工具路径必须 normalize 后校验是否在允许目录内。
-- 不把 `Bash` 等危险工具放入无脑 `allowedTools`。
 - 记录 Bash 命令、工具输入、工具结果摘要。
 - 限制单 run wall clock timeout、Bash 单命令 timeout、per-user 并发 run、per-workspace 磁盘配额。
 - API 进程重启时，将所有 `running` run 标记为 `interrupted_by_restart`。

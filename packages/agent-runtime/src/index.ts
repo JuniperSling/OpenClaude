@@ -4,7 +4,6 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { query, type McpServerConfig, type SDKMessage, type SDKUserMessage } from "@anthropic-ai/claude-agent-sdk";
 import { getModel, getOpenRouterDefaults } from "@openclaude/model-registry";
-import { shouldBlockBashCommand } from "@openclaude/sandbox";
 import type { AgentStreamEnvelope, RunInput } from "@openclaude/shared";
 import { inferUiHint } from "@openclaude/shared";
 
@@ -110,29 +109,19 @@ export class ClaudeAgentRuntime implements AgentRuntime {
         maxTurns: 60,
         includePartialMessages: true,
         tools: { type: "preset", preset: "claude_code" },
-        permissionMode: "acceptEdits",
+        permissionMode: "bypassPermissions",
+        allowDangerouslySkipPermissions: true,
         settingSources: ["project"],
         ...(input.resumeSessionId ? { resume: input.resumeSessionId } : {}),
         ...(input.skills?.length ? { skills: input.skills } : {}),
         ...(input.mcpServers ? { mcpServers: input.mcpServers } : {}),
-        canUseTool: async (toolName, rawInput) => {
-          const toolInput = rawInput as Record<string, unknown>;
+        canUseTool: async (toolName) => {
           if (toolName === "AskUserQuestion") {
             return {
               behavior: "deny" as const,
               message: "OpenClaude paused this run so the browser user can answer the question.",
               interrupt: true
             };
-          }
-          if (toolName === "Bash") {
-            const command = typeof toolInput.command === "string" ? toolInput.command : "";
-            const reason = shouldBlockBashCommand(command);
-            if (reason) {
-              return {
-                behavior: "deny" as const,
-                message: reason
-              };
-            }
           }
           return { behavior: "allow" as const, updatedInput: {} };
         }

@@ -156,38 +156,3 @@ export function sanitizeName(input: string): string {
     .replace(/^-+|-+$/g, "")
     .slice(0, 64);
 }
-
-export function shouldBlockBashCommand(command: string): string | undefined {
-  const risky = [
-    /\bsudo\b/,
-    /\bcurl\b/,
-    /\bwget\b/,
-    /\bssh\b/,
-    /\bscp\b/,
-    /\bdd\b/,
-    /\bmkfs\b/,
-    /\bchmod\s+777\b/
-  ];
-  if (hasDangerousRecursiveRemove(command) || risky.some((pattern) => pattern.test(command))) {
-    return "Command matched the OpenClaude risky Bash deny list.";
-  }
-  return undefined;
-}
-
-function hasDangerousRecursiveRemove(command: string): boolean {
-  const rmRecursiveForce = /\brm\s+-(?=[a-zA-Z]*r)(?=[a-zA-Z]*f)[a-zA-Z]+\s+((?:"[^"]+"|'[^']+'|\S+))/g;
-  let match: RegExpExecArray | null;
-  while ((match = rmRecursiveForce.exec(command))) {
-    const target = stripShellQuotes(match[1] ?? "");
-    if (target === "/" || target === "/*" || target === "~" || target === "$HOME" || target === "${HOME}") return true;
-    if (target.startsWith("/") && !target.startsWith("/tmp/") && !target.startsWith("/var/tmp/")) return true;
-  }
-  return false;
-}
-
-function stripShellQuotes(value: string): string {
-  if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-    return value.slice(1, -1);
-  }
-  return value;
-}

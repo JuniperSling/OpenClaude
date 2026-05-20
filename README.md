@@ -41,7 +41,7 @@ apps/
 packages/
   shared/               # Shared types, Zod schemas, SDK→UI hint helpers
   agent-runtime/        # Claude Agent SDK wrapper + mock runtime
-  sandbox/              # Workspace layout, path guard, Bash deny list, skill projection
+  sandbox/              # Workspace layout, path guard, skill projection
   model-registry/       # Model catalogue (Claude / DeepSeek), OpenRouter env mapping
 infra/
   compose.yaml          # Single-machine Docker skeleton (early draft, not used in prod)
