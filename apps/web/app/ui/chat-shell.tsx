@@ -18,6 +18,7 @@ import {
   type ModelOption,
   type StoredHistoryMessage,
   type StoredRunMeta,
+  type WorkspaceChangedMessage,
   type WorkspaceFileNode
 } from "./api";
 import { flattenWorkspaceFiles } from "./file-tree";
@@ -124,12 +125,14 @@ export function ChatShell() {
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [isDragging, setIsDragging] = useState(false);
   const [workspaceRoot, setWorkspaceRoot] = useState<WorkspaceFileNode | undefined>();
+  const [workspaceRootPath, setWorkspaceRootPath] = useState<string | undefined>();
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
   const [fileRefs, setFileRefs] = useState<string[]>([]);
   const [mentionState, setMentionState] = useState<MentionState | undefined>();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
+  const workspaceWsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const chatLogRef = useRef<HTMLElement | null>(null);
   const stickToBottomRef = useRef(true);
@@ -175,6 +178,7 @@ export function ChatShell() {
     if (!token) return;
     const result = await listWorkspaceFiles(token);
     setWorkspaceRoot(result.root);
+    setWorkspaceRootPath(result.rootPath);
   }, [token]);
 
   useEffect(() => {
@@ -184,6 +188,25 @@ export function ChatShell() {
   useEffect(() => {
     void refreshWorkspaceFiles().catch((err) => setError(String(err)));
   }, [refreshWorkspaceFiles]);
+
+  useEffect(() => {
+    if (!token) return;
+    const socket = new WebSocket(`${getWsBaseUrl()}?token=${encodeURIComponent(token)}`);
+    workspaceWsRef.current = socket;
+    socket.addEventListener("open", () => {
+      socket.send(JSON.stringify({ type: "subscribe_workspace" }));
+    });
+    socket.addEventListener("message", (event) => {
+      const message = JSON.parse(event.data as string) as WorkspaceChangedMessage | { type?: string };
+      if (message.type === "workspace_changed") {
+        void refreshWorkspaceFiles().catch((err) => setError(String(err)));
+      }
+    });
+    return () => {
+      socket.close();
+      if (workspaceWsRef.current === socket) workspaceWsRef.current = null;
+    };
+  }, [token, refreshWorkspaceFiles]);
 
   useEffect(() => {
     if (!stickToBottomRef.current) return;
@@ -352,18 +375,19 @@ export function ChatShell() {
   }
 
   function insertFileReference(path: string) {
-    const reference = `@${path}`;
     setPrompt((current) => {
       const cursor = textareaRef.current?.selectionStart ?? current.length;
       const start = mentionState?.start ?? cursor;
       const end = mentionState?.end ?? cursor;
-      const separator = start > 0 && !/\s/.test(current[start - 1] ?? "") ? " " : "";
-      const suffix = current[end] && !/\s/.test(current[end]) ? " " : "";
-      return `${current.slice(0, start)}${separator}${reference}${suffix}${current.slice(end)}`;
+      return `${current.slice(0, start)}${current.slice(end)}`.replace(/\s{2,}/g, " ");
     });
     setFileRefs((current) => (current.includes(path) ? current : [...current, path]));
     setMentionState(undefined);
     requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
+  function removeFileReference(path: string) {
+    setFileRefs((current) => current.filter((item) => item !== path));
   }
 
   async function uploadWorkspaceReferences(files: Array<{ file: File; path?: string }>) {
@@ -481,11 +505,13 @@ export function ChatShell() {
     setOpenRawRunId(undefined);
     setPendingImages([]);
     setWorkspaceRoot(undefined);
+    setWorkspaceRootPath(undefined);
     setFileRefs([]);
     setMentionState(undefined);
     clearPendingAsk();
     clearTextQueues();
     wsRef.current?.close();
+    workspaceWsRef.current?.close();
   }
 
   async function handleDeleteSession(sessionId: string) {
@@ -581,8 +607,9 @@ export function ChatShell() {
     const rawPrompt = overridePrompt ?? prompt;
     const isAskAnswer = Boolean(overridePrompt);
     const imagesForRun = isAskAnswer ? [] : pendingImages;
+    const activeFileRefs = isAskAnswer ? [] : collectActiveFileRefs(rawPrompt, fileRefs, workspaceFiles);
     if (!token) return;
-    if (!rawPrompt.trim() && imagesForRun.length === 0) return;
+    if (!rawPrompt.trim() && imagesForRun.length === 0 && activeFileRefs.length === 0) return;
 
     if (imagesForRun.some((image) => image.status === "uploading")) {
       setError("图片仍在上传，请稍候");
@@ -597,8 +624,8 @@ export function ChatShell() {
     setError(undefined);
     stickToBottomRef.current = true;
     setIsAtBottom(true);
-    const nextPrompt = rawPrompt.trim() || (readyImages.length > 0 ? "(image input)" : "");
-    const activeFileRefs = isAskAnswer ? [] : collectActiveFileRefs(nextPrompt, fileRefs, workspaceFiles);
+    const nextPrompt =
+      rawPrompt.trim() || (readyImages.length > 0 ? "(image input)" : activeFileRefs.length > 0 ? "(workspace file reference)" : "");
     if (!overridePrompt) {
       setPrompt("");
       setPendingImages([]);
@@ -1101,6 +1128,19 @@ export function ChatShell() {
                   ))}
                 </div>
               ) : null}
+              {fileRefs.length > 0 ? (
+                <div className="composer-file-refs">
+                  {fileRefs.map((path) => (
+                    <span className="file-ref-chip" key={path}>
+                      <span className="file-ref-icon">≡</span>
+                      <span className="file-ref-name">{path.split("/").pop() ?? path}</span>
+                      <button type="button" aria-label={`移除 ${path}`} onClick={() => removeFileReference(path)}>
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              ) : null}
               <textarea
                 ref={textareaRef}
                 placeholder={
@@ -1115,6 +1155,17 @@ export function ChatShell() {
                   if (event.key === "Enter" && !event.shiftKey) {
                     event.preventDefault();
                     void submitPrompt();
+                    return;
+                  }
+                  if (
+                    event.key === "Backspace" &&
+                    !prompt &&
+                    fileRefs.length > 0 &&
+                    textareaRef.current?.selectionStart === 0 &&
+                    textareaRef.current.selectionEnd === 0
+                  ) {
+                    event.preventDefault();
+                    removeFileReference(fileRefs[fileRefs.length - 1]!);
                   }
                 }}
               />
@@ -1165,7 +1216,7 @@ export function ChatShell() {
                   <button
                     className="send-button"
                     type="submit"
-                    disabled={!prompt.trim() && pendingImages.length === 0}
+                    disabled={!prompt.trim() && pendingImages.length === 0 && fileRefs.length === 0}
                   >
                     ↑
                   </button>
@@ -1179,6 +1230,7 @@ export function ChatShell() {
         <WorkspacePanel
           token={token}
           root={workspaceRoot}
+          rootPath={workspaceRootPath}
           isOpen={isWorkspaceOpen}
           onClose={() => setIsWorkspaceOpen(false)}
           onRefresh={refreshWorkspaceFiles}
@@ -1602,7 +1654,7 @@ function collectActiveFileRefs(prompt: string, selectedRefs: string[], workspace
   const knownPaths = new Set(workspaceFiles.map((file) => file.path));
   const refs = new Set<string>();
   for (const path of selectedRefs) {
-    if (prompt.includes(`@${path}`)) refs.add(path);
+    if (knownPaths.has(path)) refs.add(path);
   }
   const mentionPattern = /(?:^|\s)@([^\s]+)/g;
   let match: RegExpExecArray | null;

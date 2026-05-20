@@ -9,6 +9,8 @@ export type WorkspaceLayout = {
   workspacesRoot: string;
   workspaceRoot: string;
   globalWorkspacePath: string;
+  attachmentsPath: string;
+  userSkillsPath: string;
 };
 
 export type SkillProjection = {
@@ -70,7 +72,11 @@ export class LocalWorkspaceManager {
 
   async ensureGlobalWorkspace(userId: string): Promise<WorkspaceLayout> {
     const layout = this.globalLayout(userId);
-    await this.ensureLayout(layout);
+    await mkdir(layout.workspaceRoot, { recursive: true });
+    await mkdir(layout.sharedHomePath, { recursive: true });
+    await mkdir(layout.sdkSessionStoragePath, { recursive: true });
+    await mkdir(layout.attachmentsPath, { recursive: true });
+    await mkdir(layout.userSkillsPath, { recursive: true });
     return layout;
   }
 
@@ -87,7 +93,9 @@ export class LocalWorkspaceManager {
       sdkSessionStoragePath,
       workspacesRoot,
       workspaceRoot,
-      globalWorkspacePath: path.join(userRoot, "workspace")
+      globalWorkspacePath: path.join(userRoot, "workspace"),
+      attachmentsPath: path.join(userRoot, "attachments"),
+      userSkillsPath: path.join(userRoot, "skills")
     };
   }
 
@@ -101,7 +109,11 @@ export class LocalWorkspaceManager {
           workspace.rootPath
         )
       : this.layout(workspace.userId, workspace.id);
-    await this.ensureLayout(layout);
+    if (layout.workspaceRoot === layout.globalWorkspacePath) {
+      await this.ensureGlobalWorkspace(workspace.userId);
+    } else {
+      await this.ensureLayout(layout);
+    }
     return layout;
   }
 
@@ -114,7 +126,7 @@ export class LocalWorkspaceManager {
   }
 
   async projectSkills(workspaceRoot: string, skills: SkillProjection[]): Promise<string[]> {
-    const skillsRoot = path.join(workspaceRoot, ".claude", "skills");
+    const skillsRoot = path.join(path.dirname(workspaceRoot), "skills");
     await rm(skillsRoot, { recursive: true, force: true });
     await mkdir(skillsRoot, { recursive: true });
 
@@ -157,7 +169,6 @@ export function shouldBlockBashCommand(command: string): string | undefined {
     /\bmkfs\b/,
     /\bchmod\s+777\b/
   ];
-  if (command.includes("..")) return "Path traversal is not allowed in Bash commands.";
   if (risky.some((pattern) => pattern.test(command))) {
     return "Command matched the OpenClaude risky Bash deny list.";
   }

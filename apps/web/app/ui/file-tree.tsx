@@ -7,6 +7,7 @@ export function FileTree({
   selectedPath,
   token,
   onSelect,
+  onOpenPreview,
   onInsertReference,
   onDelete,
   rawUrl
@@ -15,6 +16,7 @@ export function FileTree({
   selectedPath?: string;
   token: string;
   onSelect: (node: WorkspaceFileNode) => void;
+  onOpenPreview: (node: WorkspaceFileNode) => void;
   onInsertReference: (path: string) => void;
   onDelete: (path: string) => void;
   rawUrl: (path: string, token: string) => string;
@@ -31,6 +33,7 @@ export function FileTree({
           token={token}
           depth={0}
           onSelect={onSelect}
+          onOpenPreview={onOpenPreview}
           onInsertReference={onInsertReference}
           onDelete={onDelete}
           rawUrl={rawUrl}
@@ -46,6 +49,7 @@ function FileTreeNode({
   token,
   depth,
   onSelect,
+  onOpenPreview,
   onInsertReference,
   onDelete,
   rawUrl
@@ -55,6 +59,7 @@ function FileTreeNode({
   token: string;
   depth: number;
   onSelect: (node: WorkspaceFileNode) => void;
+  onOpenPreview: (node: WorkspaceFileNode) => void;
   onInsertReference: (path: string) => void;
   onDelete: (path: string) => void;
   rawUrl: (path: string, token: string) => string;
@@ -67,6 +72,9 @@ function FileTreeNode({
         draggable={!isDirectory}
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => onSelect(node)}
+        onDoubleClick={() => {
+          if (!isDirectory) onOpenPreview(node);
+        }}
         onDragStart={(event) => {
           if (isDirectory) return;
           event.dataTransfer.setData("application/x-openclaude-workspace-file", JSON.stringify({ path: node.path }));
@@ -125,6 +133,7 @@ function FileTreeNode({
               token={token}
               depth={depth + 1}
               onSelect={onSelect}
+              onOpenPreview={onOpenPreview}
               onInsertReference={onInsertReference}
               onDelete={onDelete}
               rawUrl={rawUrl}

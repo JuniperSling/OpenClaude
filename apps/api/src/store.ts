@@ -111,6 +111,7 @@ export class FileStore {
     await this.migrateLegacyStoreIfNeeded();
     await this.ensureAdminUser();
     await this.discardLegacySessionWorkspaces();
+    await this.discardVisibleWorkspaceInternals();
     await this.markRunningRunsInterrupted();
   }
 
@@ -587,6 +588,20 @@ export class FileStore {
       await rm(path.join(this.dataDir, "users", user.id, "workspaces"), { recursive: true, force: true });
     }
     await rm(path.join(this.dataDir, "run-events"), { recursive: true, force: true });
+  }
+
+  private async discardVisibleWorkspaceInternals() {
+    const migrated = this.database().prepare("SELECT value FROM meta WHERE key = 'visible_workspace_v1'").get();
+    if (migrated) return;
+
+    const users = this.database().prepare("SELECT id FROM users").all() as Array<{ id: string }>;
+    this.database().prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('visible_workspace_v1', ?)").run(now());
+    for (const user of users) {
+      const workspaceRoot = path.join(this.dataDir, "users", user.id, "workspace");
+      for (const internalName of [".claude", "files", "uploads"]) {
+        await rm(path.join(workspaceRoot, internalName), { recursive: true, force: true });
+      }
+    }
   }
 
   private async ensureAdminUser() {

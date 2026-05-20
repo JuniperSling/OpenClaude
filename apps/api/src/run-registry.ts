@@ -1,9 +1,10 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { watch, type FSWatcher } from "node:fs";
+import { mkdir, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { Server } from "node:http";
 import { WebSocketServer, type WebSocket } from "ws";
 import type { AgentRuntime, RunningAgentQuery } from "@openclaude/agent-runtime";
-import type { AgentStreamEnvelope, ClientControlMessage, Run, RunInput, Session } from "@openclaude/shared";
+import type { AgentStreamEnvelope, ClientControlMessage, Run, RunInput, Session, WorkspaceChangedMessage } from "@openclaude/shared";
 import { LocalWorkspaceManager } from "@openclaude/sandbox";
 import { config } from "./config.js";
 import { authenticateToken } from "./auth.js";
@@ -12,6 +13,17 @@ import type { FileStore } from "./store.js";
 type Subscriber = {
   socket: WebSocket;
   runId: string;
+};
+
+type WorkspaceSubscriber = {
+  socket: WebSocket;
+  userId: string;
+};
+
+type WorkspaceWatcher = {
+  watchers: FSWatcher[];
+  refreshTimer?: ReturnType<typeof setTimeout>;
+  broadcastTimer?: ReturnType<typeof setTimeout>;
 };
 
 const terminalStatuses = new Set<Run["status"]>([
@@ -27,6 +39,8 @@ export class RunRegistry {
   private readonly persistQueues = new Map<string, Promise<void>>();
   private readonly latestSequences = new Map<string, number>();
   private readonly workspaceManager = new LocalWorkspaceManager(config.dataDir);
+  private readonly workspaceSubscribers = new Set<WorkspaceSubscriber>();
+  private readonly workspaceWatchers = new Map<string, WorkspaceWatcher>();
 
   constructor(
     private readonly store: FileStore,
@@ -58,6 +72,11 @@ export class RunRegistry {
             }
             return;
           }
+          if (message.type === "subscribe_workspace") {
+            this.workspaceSubscribers.add({ socket, userId: user.id });
+            await this.ensureWorkspaceWatcher(user.id);
+            return;
+          }
           if (message.type === "stop_run") {
             await this.stopRun(message.runId, user.id);
           }
@@ -69,6 +88,9 @@ export class RunRegistry {
       socket.on("close", () => {
         for (const subscriber of [...this.subscribers]) {
           if (subscriber.socket === socket) this.subscribers.delete(subscriber);
+        }
+        for (const subscriber of [...this.workspaceSubscribers]) {
+          if (subscriber.socket === socket) this.workspaceSubscribers.delete(subscriber);
         }
       });
     });
@@ -205,4 +227,72 @@ export class RunRegistry {
     await this.store.appendEvent(event);
     await writeFile(eventsPath, `${JSON.stringify(event)}\n`, { encoding: "utf8", flag: "a" });
   }
+
+  private async ensureWorkspaceWatcher(userId: string) {
+    if (this.workspaceWatchers.has(userId)) return;
+    const layout = await this.workspaceManager.ensureGlobalWorkspace(userId);
+    const watcher: WorkspaceWatcher = { watchers: [] };
+    this.workspaceWatchers.set(userId, watcher);
+    await this.rebuildWorkspaceWatcher(userId, layout.workspaceRoot);
+  }
+
+  private async rebuildWorkspaceWatcher(userId: string, workspaceRoot: string) {
+    const current = this.workspaceWatchers.get(userId);
+    if (!current) return;
+    for (const watcher of current.watchers) watcher.close();
+    current.watchers = [];
+
+    const directories = await listDirectories(workspaceRoot);
+    for (const directory of directories) {
+      try {
+        const watcher = watch(directory, { persistent: false }, () => {
+          this.scheduleWorkspaceBroadcast(userId);
+          this.scheduleWorkspaceWatcherRefresh(userId, workspaceRoot);
+        });
+        current.watchers.push(watcher);
+      } catch (error) {
+        console.warn("Failed to watch workspace directory", directory, error);
+      }
+    }
+  }
+
+  private scheduleWorkspaceBroadcast(userId: string) {
+    const watcher = this.workspaceWatchers.get(userId);
+    if (!watcher || watcher.broadcastTimer) return;
+    watcher.broadcastTimer = setTimeout(() => {
+      watcher.broadcastTimer = undefined;
+      this.broadcastWorkspaceChanged(userId);
+    }, 250);
+  }
+
+  private scheduleWorkspaceWatcherRefresh(userId: string, workspaceRoot: string) {
+    const watcher = this.workspaceWatchers.get(userId);
+    if (!watcher || watcher.refreshTimer) return;
+    watcher.refreshTimer = setTimeout(() => {
+      watcher.refreshTimer = undefined;
+      void this.rebuildWorkspaceWatcher(userId, workspaceRoot).catch((error) => {
+        console.warn("Failed to refresh workspace watchers", error);
+      });
+    }, 1000);
+  }
+
+  private broadcastWorkspaceChanged(userId: string) {
+    const payload: WorkspaceChangedMessage = { type: "workspace_changed", timestamp: new Date().toISOString() };
+    const encoded = JSON.stringify(payload);
+    for (const subscriber of this.workspaceSubscribers) {
+      if (subscriber.userId === userId && subscriber.socket.readyState === subscriber.socket.OPEN) {
+        subscriber.socket.send(encoded);
+      }
+    }
+  }
+}
+
+async function listDirectories(root: string): Promise<string[]> {
+  const directories = [root];
+  const entries = await readdir(root, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name === ".DS_Store") continue;
+    directories.push(...(await listDirectories(path.join(root, entry.name))));
+  }
+  return directories;
 }

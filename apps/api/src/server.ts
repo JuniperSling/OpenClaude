@@ -173,7 +173,7 @@ app.get("/api/workspace/files", async (request, response, next) => {
     const workspace = await getOrCreateGlobalWorkspace(request.user!.id);
     const target = resolveWorkspacePath(workspace.rootPath, parsed.data ?? "");
     const root = await buildWorkspaceNode(workspace.rootPath, target.absolutePath, target.relativePath, { count: 0 });
-    response.json({ root });
+    response.json({ root, rootPath: workspace.rootPath });
   } catch (error) {
     next(error);
   }
@@ -399,7 +399,7 @@ app.get("/api/sessions/:sessionId/attachments/:filename", async (request, respon
       response.status(404).json({ error: "Session not found" });
       return;
     }
-    const uploadsDir = path.join(session.workspace.rootPath, "uploads");
+    const uploadsDir = path.join(workspaceManager.globalLayout(request.user!.id).attachmentsPath, session.id);
     const thumbsDir = path.join(uploadsDir, "thumbs");
     const fullPath = path.join(uploadsDir, filename);
     const wantsFull = request.query.full === "1" || request.query.full === "true";
@@ -455,7 +455,7 @@ app.post("/api/runs", async (request, response, next) => {
       kind?: "image" | "file";
     }> = [];
     if (parsed.data.attachmentIds?.length) {
-      const uploadsDir = path.join(workspace.rootPath, "uploads");
+      const uploadsDir = path.join(workspaceManager.globalLayout(request.user!.id).attachmentsPath, session.id);
       await mkdir(uploadsDir, { recursive: true });
       const stagingDir = path.join(config.dataDir, "users", request.user!.id, STAGING_DIR_NAME);
       for (const id of parsed.data.attachmentIds) {
@@ -615,7 +615,7 @@ async function buildWorkspaceNode(
   const children: WorkspaceFileNode[] = [];
   for (const entry of entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))) {
     if (counter.count >= MAX_WORKSPACE_TREE_NODES) break;
-    if (entry.name === ".DS_Store") continue;
+    if (entry.name === ".DS_Store" || entry.name === ".claude") continue;
     const childAbsolutePath = path.join(absolutePath, entry.name);
     const childRelativePath = normalizeWorkspaceRelativePath(path.relative(workspaceRoot, childAbsolutePath));
     children.push(await buildWorkspaceNode(workspaceRoot, childAbsolutePath, childRelativePath, counter));

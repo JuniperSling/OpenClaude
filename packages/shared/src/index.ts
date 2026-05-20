@@ -112,8 +112,14 @@ export type AgentStreamEnvelope = {
 
 export type ClientControlMessage =
   | { type: "subscribe_run"; runId: string; afterSequence?: number }
+  | { type: "subscribe_workspace" }
   | { type: "stop_run"; runId: string }
   | { type: "ack"; runId: string; sequence: number };
+
+export type WorkspaceChangedMessage = {
+  type: "workspace_changed";
+  timestamp: string;
+};
 
 export const createSessionRequestSchema = z.object({
   title: z.string().min(1).max(120).optional(),
@@ -143,6 +149,7 @@ export type CreateWorkspaceFolderRequest = z.infer<typeof createWorkspaceFolderR
 
 export type WorkspaceFilesResponse = {
   root: WorkspaceFileNode;
+  rootPath: string;
 };
 
 export type WorkspaceFileContentResponse = {

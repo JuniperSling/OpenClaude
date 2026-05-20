@@ -55,10 +55,47 @@ export function FilePreview({ token, node }: { token: string; node?: WorkspaceFi
   if (content) {
     return (
       <pre className="file-preview-code">
-        <code>{content.content}</code>
+        <code>
+          {content.previewType === "code" ? <HighlightedCode code={content.content} /> : content.content}
+        </code>
       </pre>
     );
   }
 
   return <div className="file-preview-placeholder">暂不支持预览，可下载查看</div>;
+}
+
+function HighlightedCode({ code }: { code: string }) {
+  const pattern =
+    /(\/\/.*$|#.*$|\/\*[\s\S]*?\*\/|"(?:\\.|[^"])*"|'(?:\\.|[^'])*'|`(?:\\.|[^`])*`|\b(?:const|let|var|function|return|if|else|for|while|switch|case|break|continue|class|type|interface|import|export|from|async|await|try|catch|throw|new|true|false|null|undefined)\b|\b\d+(?:\.\d+)?\b)/gm;
+  const parts: Array<{ text: string; kind?: string }> = [];
+  let cursor = 0;
+  for (const match of code.matchAll(pattern)) {
+    const value = match[0];
+    const index = match.index ?? 0;
+    if (index > cursor) parts.push({ text: code.slice(cursor, index) });
+    parts.push({ text: value, kind: highlightKind(value) });
+    cursor = index + value.length;
+  }
+  if (cursor < code.length) parts.push({ text: code.slice(cursor) });
+  return (
+    <>
+      {parts.map((part, index) =>
+        part.kind ? (
+          <span className={`syntax-${part.kind}`} key={index}>
+            {part.text}
+          </span>
+        ) : (
+          part.text
+        )
+      )}
+    </>
+  );
+}
+
+function highlightKind(value: string) {
+  if (value.startsWith("//") || value.startsWith("#") || value.startsWith("/*")) return "comment";
+  if (value.startsWith("\"") || value.startsWith("'") || value.startsWith("`")) return "string";
+  if (/^\d/.test(value)) return "number";
+  return "keyword";
 }

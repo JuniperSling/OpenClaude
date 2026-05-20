@@ -869,13 +869,65 @@ button {
   position: absolute;
   left: 14px;
   right: 14px;
-  bottom: 56px;
+  bottom: calc(100% + 8px);
   z-index: 20;
   overflow: hidden;
   border: 1px solid var(--border);
   border-radius: 14px;
   background: var(--surface);
   box-shadow: var(--shadow);
+}
+
+.composer-file-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 12px 12px 0;
+}
+
+.file-ref-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 220px;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface-soft);
+  color: #6f8fb7;
+  padding: 6px 8px;
+  font-size: 13px;
+  line-height: 1;
+}
+
+.file-ref-icon {
+  color: #6f8fb7;
+  font-size: 15px;
+}
+
+.file-ref-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-ref-chip button {
+  display: grid;
+  place-items: center;
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  color: var(--muted);
+  opacity: 0;
+}
+
+.file-ref-chip:hover button,
+.file-ref-chip button:focus {
+  opacity: 1;
+}
+
+.file-ref-chip button:hover {
+  background: var(--sidebar-hover);
+  color: var(--danger);
 }
 
 .mention-option,
@@ -1046,12 +1098,12 @@ button {
 
 .workspace-panel {
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto minmax(190px, 38vh);
+  grid-template-rows: auto auto minmax(0, 1fr) auto auto;
   height: 100vh;
   height: 100dvh;
   min-width: 0;
   border-left: 1px solid rgba(216, 206, 192, 0.7);
-  background: color-mix(in srgb, var(--surface) 82%, var(--page));
+  background: var(--sidebar);
 }
 
 .claude-shell:not(.workspace-open) .workspace-panel {
@@ -1076,6 +1128,11 @@ button {
 }
 
 .workspace-header small {
+  display: block;
+  max-width: 288px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   color: var(--muted);
   font-size: 12px;
 }
@@ -1097,13 +1154,14 @@ button {
 
 .workspace-toolbar button:hover {
   color: var(--text);
-  border-color: var(--accent);
+  border-color: var(--border-strong);
+  background: var(--sidebar-hover);
 }
 
 .workspace-drop {
   min-height: 0;
-  border-top: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
-  border-bottom: 1px solid color-mix(in srgb, var(--border) 64%, transparent);
+  border-top: 1px solid rgba(216, 206, 192, 0.7);
+  border-bottom: 1px solid rgba(216, 206, 192, 0.7);
 }
 
 .workspace-drop.dragging {
@@ -1142,7 +1200,7 @@ button {
 
 .file-row:hover,
 .file-row.selected {
-  background: var(--surface-soft);
+  background: var(--sidebar-hover);
 }
 
 .file-icon {
@@ -1190,6 +1248,77 @@ button {
   padding: 10px 12px 14px;
 }
 
+.workspace-hint {
+  color: var(--muted);
+  font-size: 12px;
+  padding: 10px 12px 14px;
+}
+
+.file-preview-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: grid;
+  place-items: center;
+  background: rgba(27, 24, 20, 0.42);
+}
+
+.file-preview-dialog {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  width: min(900px, calc(100vw - 48px));
+  height: min(720px, calc(100vh - 64px));
+  border: 1px solid var(--border-strong);
+  border-radius: 18px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.file-preview-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  border-bottom: 1px solid var(--border);
+  padding: 12px 14px;
+}
+
+.file-preview-header div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.file-preview-header strong,
+.file-preview-header small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-preview-header small {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.file-preview-header button {
+  width: 30px;
+  height: 30px;
+  border-radius: 999px;
+  color: var(--muted);
+}
+
+.file-preview-header button:hover {
+  background: var(--surface-soft);
+  color: var(--danger);
+}
+
+.file-preview-body {
+  min-height: 0;
+  overflow: auto;
+  padding: 14px;
+}
+
 .file-preview-image {
   display: block;
   max-width: 100%;
@@ -1219,6 +1348,24 @@ button {
   font-size: 12px;
   line-height: 1.55;
   white-space: pre-wrap;
+}
+
+.syntax-keyword {
+  color: #8a5cf6;
+  font-weight: 650;
+}
+
+.syntax-string {
+  color: #4c8f54;
+}
+
+.syntax-comment {
+  color: var(--muted);
+  font-style: italic;
+}
+
+.syntax-number {
+  color: #b66a42;
 }
 
 .file-preview-markdown {

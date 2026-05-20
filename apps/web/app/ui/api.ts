@@ -51,6 +51,11 @@ export type StoredRunMeta = {
   raw?: string;
 };
 
+export type WorkspaceChangedMessage = {
+  type: "workspace_changed";
+  timestamp: string;
+};
+
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_BASE_URL ?? "";
 
 export async function login(username: string, password: string): Promise<AuthResponse> {

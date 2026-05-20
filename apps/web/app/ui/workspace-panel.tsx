@@ -9,6 +9,7 @@ import { FileTree } from "./file-tree";
 export function WorkspacePanel({
   token,
   root,
+  rootPath,
   isOpen,
   onClose,
   onRefresh,
@@ -16,12 +17,14 @@ export function WorkspacePanel({
 }: {
   token: string;
   root?: WorkspaceFileNode;
+  rootPath?: string;
   isOpen: boolean;
   onClose: () => void;
   onRefresh: () => Promise<void>;
   onInsertReference: (path: string) => void;
 }) {
   const [selectedNode, setSelectedNode] = useState<WorkspaceFileNode | undefined>();
+  const [previewNode, setPreviewNode] = useState<WorkspaceFileNode | undefined>();
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | undefined>();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -63,7 +66,7 @@ export function WorkspacePanel({
       <header className="workspace-header">
         <div>
           <strong>Workspace</strong>
-          <small>用户级共享文件区</small>
+          <small title={rootPath}>{rootPath ?? "正在加载路径..."}</small>
         </div>
         <button className="icon-button mobile-only" type="button" aria-label="关闭 Workspace" onClick={onClose}>
           ×
@@ -75,9 +78,6 @@ export function WorkspacePanel({
         </button>
         <button type="button" onClick={handleCreateFolder}>
           新建文件夹
-        </button>
-        <button type="button" onClick={() => void onRefresh()}>
-          刷新
         </button>
       </div>
       <input
@@ -115,6 +115,7 @@ export function WorkspacePanel({
               selectedPath={selectedNode?.path}
               token={token}
               onSelect={setSelectedNode}
+              onOpenPreview={setPreviewNode}
               onInsertReference={onInsertReference}
               onDelete={handleDelete}
               rawUrl={workspaceRawUrl}
@@ -125,9 +126,25 @@ export function WorkspacePanel({
         </div>
       </div>
       {error ? <div className="workspace-error">{error}</div> : null}
-      <section className="workspace-preview compact-scroll">
-        <FilePreview token={token} node={selectedNode} />
-      </section>
+      <div className="workspace-hint">双击文件打开预览</div>
+      {previewNode ? (
+        <div className="file-preview-modal" role="dialog" aria-modal="true" aria-label={`预览 ${previewNode.name}`}>
+          <div className="file-preview-dialog">
+            <header className="file-preview-header">
+              <div>
+                <strong>{previewNode.name}</strong>
+                <small>{previewNode.path}</small>
+              </div>
+              <button type="button" aria-label="关闭预览" onClick={() => setPreviewNode(undefined)}>
+                ×
+              </button>
+            </header>
+            <div className="file-preview-body compact-scroll">
+              <FilePreview token={token} node={previewNode} />
+            </div>
+          </div>
+        </div>
+      ) : null}
     </aside>
   );
 }
