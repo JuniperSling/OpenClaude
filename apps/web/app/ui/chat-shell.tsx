@@ -89,6 +89,11 @@ type MentionState = {
   query: string;
 };
 
+type FileReferenceBlock = {
+  path: string;
+  prefix: string;
+};
+
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
 function getWsBaseUrl() {
@@ -127,7 +132,7 @@ export function ChatShell() {
   const [workspaceRoot, setWorkspaceRoot] = useState<WorkspaceFileNode | undefined>();
   const [workspaceRootPath, setWorkspaceRootPath] = useState<string | undefined>();
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
-  const [fileRefs, setFileRefs] = useState<string[]>([]);
+  const [fileRefs, setFileRefs] = useState<FileReferenceBlock[]>([]);
   const [mentionState, setMentionState] = useState<MentionState | undefined>();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -375,19 +380,33 @@ export function ChatShell() {
   }
 
   function insertFileReference(path: string) {
-    setPrompt((current) => {
-      const cursor = textareaRef.current?.selectionStart ?? current.length;
-      const start = mentionState?.start ?? cursor;
-      const end = mentionState?.end ?? cursor;
-      return `${current.slice(0, start)}${current.slice(end)}`.replace(/\s{2,}/g, " ");
-    });
-    setFileRefs((current) => (current.includes(path) ? current : [...current, path]));
+    const currentPrompt = prompt;
+    const cursor = textareaRef.current?.selectionStart ?? currentPrompt.length;
+    const start = mentionState?.start ?? cursor;
+    const end = mentionState?.end ?? cursor;
+    const prefix = currentPrompt.slice(0, start);
+    const suffix = currentPrompt.slice(end);
+    const alreadyReferenced = fileRefs.some((ref) => ref.path === path);
+
+    setPrompt(alreadyReferenced ? `${prefix}${suffix}`.replace(/\s{2,}/g, " ") : suffix.replace(/^\s{2,}/, " "));
+    setFileRefs((current) => (current.some((ref) => ref.path === path) ? current : [...current, { path, prefix }]));
     setMentionState(undefined);
     requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
   function removeFileReference(path: string) {
-    setFileRefs((current) => current.filter((item) => item !== path));
+    const index = fileRefs.findIndex((ref) => ref.path === path);
+    if (index === -1) return;
+
+    const removed = fileRefs[index]!;
+    const next = fileRefs.filter((ref) => ref.path !== path);
+    if (index < next.length) {
+      const target = next[index]!;
+      next[index] = { ...target, prefix: `${removed.prefix}${target.prefix}` };
+    } else if (removed.prefix) {
+      setPrompt((current) => `${removed.prefix}${current}`);
+    }
+    setFileRefs(next);
   }
 
   async function uploadWorkspaceReferences(files: Array<{ file: File; path?: string }>) {
@@ -604,10 +623,11 @@ export function ChatShell() {
   }
 
   async function submitPrompt(overridePrompt?: string, displayContent?: string) {
-    const rawPrompt = overridePrompt ?? prompt;
+    const rawPrompt = overridePrompt ?? getComposerPrompt(fileRefs, prompt);
     const isAskAnswer = Boolean(overridePrompt);
     const imagesForRun = isAskAnswer ? [] : pendingImages;
-    const activeFileRefs = isAskAnswer ? [] : collectActiveFileRefs(rawPrompt, fileRefs, workspaceFiles);
+    const selectedFileRefs = fileRefs.map((ref) => ref.path);
+    const activeFileRefs = isAskAnswer ? [] : collectActiveFileRefs(rawPrompt, selectedFileRefs, workspaceFiles);
     if (!token) return;
     if (!rawPrompt.trim() && imagesForRun.length === 0 && activeFileRefs.length === 0) return;
 
@@ -1129,13 +1149,16 @@ export function ChatShell() {
                 </div>
               ) : null}
               <div className="composer-input-line">
-                {fileRefs.map((path) => (
-                  <span className="file-ref-chip" key={path}>
-                    <span className="file-ref-icon">≡</span>
-                    <span className="file-ref-name">{path.split("/").pop() ?? path}</span>
-                    <button type="button" aria-label={`移除 ${path}`} onClick={() => removeFileReference(path)}>
-                      ×
-                    </button>
+                {fileRefs.map((ref) => (
+                  <span className="file-ref-inline-group" key={ref.path}>
+                    {ref.prefix ? <span className="composer-inline-text">{ref.prefix}</span> : null}
+                    <span className="file-ref-chip">
+                      <span className="file-ref-icon">≡</span>
+                      <span className="file-ref-name">{ref.path.split("/").pop() ?? ref.path}</span>
+                      <button type="button" aria-label={`移除 ${ref.path}`} onClick={() => removeFileReference(ref.path)}>
+                        ×
+                      </button>
+                    </span>
                   </span>
                 ))}
                 <textarea
@@ -1164,7 +1187,7 @@ export function ChatShell() {
                       textareaRef.current.selectionEnd === 0
                     ) {
                       event.preventDefault();
-                      removeFileReference(fileRefs[fileRefs.length - 1]!);
+                      removeFileReference(fileRefs[fileRefs.length - 1]!.path);
                     }
                   }}
                 />
@@ -1648,6 +1671,10 @@ function buildMessagesFromHistory(historyMessages: StoredHistoryMessage[]): Chat
 
 function attachmentUrl(sessionId: string, filename: string, token: string): string {
   return `/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(filename)}?token=${encodeURIComponent(token)}`;
+}
+
+function getComposerPrompt(fileRefs: FileReferenceBlock[], prompt: string): string {
+  return `${fileRefs.map((ref) => ref.prefix).join("")}${prompt}`;
 }
 
 function collectActiveFileRefs(prompt: string, selectedRefs: string[], workspaceFiles: WorkspaceFileNode[]): string[] {

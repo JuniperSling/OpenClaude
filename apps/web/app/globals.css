@@ -877,6 +877,21 @@ button {
   color: var(--muted-2);
 }
 
+.file-ref-inline-group {
+  display: inline-flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 30px;
+}
+
+.composer-inline-text {
+  color: var(--text);
+  font-size: 15px;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
 .mention-popover {
   position: absolute;
   left: 14px;
