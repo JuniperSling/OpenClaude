@@ -90,6 +90,7 @@ type MentionState = {
 };
 
 type FileReferenceBlock = {
+  id: string;
   path: string;
   prefix: string;
 };
@@ -370,9 +371,8 @@ export function ChatShell() {
       setMentionState(undefined);
       return;
     }
-    const prefix = atIndex === 0 ? "" : beforeCursor[atIndex - 1];
     const query = beforeCursor.slice(atIndex + 1);
-    if ((prefix && !/\s/.test(prefix)) || /\s/.test(query)) {
+    if (/\s/.test(query)) {
       setMentionState(undefined);
       return;
     }
@@ -386,20 +386,19 @@ export function ChatShell() {
     const end = mentionState?.end ?? cursor;
     const prefix = currentPrompt.slice(0, start);
     const suffix = currentPrompt.slice(end);
-    const alreadyReferenced = fileRefs.some((ref) => ref.path === path);
 
-    setPrompt(alreadyReferenced ? `${prefix}${suffix}`.replace(/\s{2,}/g, " ") : suffix.replace(/^\s{2,}/, " "));
-    setFileRefs((current) => (current.some((ref) => ref.path === path) ? current : [...current, { path, prefix }]));
+    setPrompt(suffix.replace(/^\s{2,}/, " "));
+    setFileRefs((current) => [...current, { id: crypto.randomUUID(), path, prefix }]);
     setMentionState(undefined);
     requestAnimationFrame(() => textareaRef.current?.focus());
   }
 
-  function removeFileReference(path: string) {
-    const index = fileRefs.findIndex((ref) => ref.path === path);
+  function removeFileReference(id: string) {
+    const index = fileRefs.findIndex((ref) => ref.id === id);
     if (index === -1) return;
 
     const removed = fileRefs[index]!;
-    const next = fileRefs.filter((ref) => ref.path !== path);
+    const next = fileRefs.filter((ref) => ref.id !== id);
     if (index < next.length) {
       const target = next[index]!;
       next[index] = { ...target, prefix: `${removed.prefix}${target.prefix}` };
@@ -1150,12 +1149,12 @@ export function ChatShell() {
               ) : null}
               <div className="composer-input-line">
                 {fileRefs.map((ref) => (
-                  <span className="file-ref-inline-group" key={ref.path}>
+                  <span className="file-ref-inline-group" key={ref.id}>
                     {ref.prefix ? <span className="composer-inline-text">{ref.prefix}</span> : null}
                     <span className="file-ref-chip">
                       <span className="file-ref-icon">≡</span>
                       <span className="file-ref-name">{ref.path.split("/").pop() ?? ref.path}</span>
-                      <button type="button" aria-label={`移除 ${ref.path}`} onClick={() => removeFileReference(ref.path)}>
+                      <button type="button" aria-label={`移除 ${ref.path}`} onClick={() => removeFileReference(ref.id)}>
                         ×
                       </button>
                     </span>
@@ -1187,7 +1186,7 @@ export function ChatShell() {
                       textareaRef.current.selectionEnd === 0
                     ) {
                       event.preventDefault();
-                      removeFileReference(fileRefs[fileRefs.length - 1]!.path);
+                      removeFileReference(fileRefs[fileRefs.length - 1]!.id);
                     }
                   }}
                 />
@@ -1674,7 +1673,7 @@ function attachmentUrl(sessionId: string, filename: string, token: string): stri
 }
 
 function getComposerPrompt(fileRefs: FileReferenceBlock[], prompt: string): string {
-  return `${fileRefs.map((ref) => ref.prefix).join("")}${prompt}`;
+  return `${fileRefs.map((ref) => `${ref.prefix}@${ref.path}`).join("")}${prompt}`;
 }
 
 function collectActiveFileRefs(prompt: string, selectedRefs: string[], workspaceFiles: WorkspaceFileNode[]): string[] {

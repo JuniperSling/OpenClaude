@@ -13,6 +13,7 @@ import {
   createRunRequestSchema,
   createSessionRequestSchema,
   loginRequestSchema,
+  moveWorkspacePathRequestSchema,
   workspacePathSchema,
   type Run,
   type Session,
@@ -320,6 +321,40 @@ app.delete("/api/workspace/files", async (request, response, next) => {
   }
 });
 
+app.patch("/api/workspace/files", async (request, response, next) => {
+  try {
+    const parsed = moveWorkspacePathRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      response.status(400).json({ error: parsed.error.flatten() });
+      return;
+    }
+    const workspace = await getOrCreateGlobalWorkspace(request.user!.id);
+    const source = resolveWorkspacePath(workspace.rootPath, parsed.data.fromPath);
+    const destination = resolveWorkspacePath(workspace.rootPath, parsed.data.toPath);
+    if (!source.relativePath || !destination.relativePath) {
+      response.status(400).json({ error: "Cannot move the workspace root" });
+      return;
+    }
+    if (
+      destination.relativePath === source.relativePath ||
+      destination.relativePath.startsWith(`${source.relativePath}/`)
+    ) {
+      response.status(400).json({ error: "Cannot move a path into itself" });
+      return;
+    }
+    await lstat(source.absolutePath);
+    if (await pathExists(destination.absolutePath)) {
+      response.status(409).json({ error: "Destination already exists" });
+      return;
+    }
+    await mkdir(path.dirname(destination.absolutePath), { recursive: true });
+    await rename(source.absolutePath, destination.absolutePath);
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/me", (request, response) => {
   response.json({ user: request.user });
 });
@@ -588,6 +623,16 @@ function resolveWorkspacePath(rootPath: string, relativePath: string) {
     relativePath: normalized,
     absolutePath: guard.resolveInside(normalized)
   };
+}
+
+async function pathExists(filePath: string): Promise<boolean> {
+  try {
+    await lstat(filePath);
+    return true;
+  } catch (error) {
+    if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return false;
+    throw error;
+  }
 }
 
 async function buildWorkspaceNode(

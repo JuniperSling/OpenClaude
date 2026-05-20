@@ -164,6 +164,14 @@ export async function deleteWorkspacePath(token: string, path: string): Promise<
   });
 }
 
+export async function moveWorkspacePath(token: string, fromPath: string, toPath: string): Promise<{ ok: true }> {
+  return request("/api/workspace/files", {
+    token,
+    method: "PATCH",
+    body: JSON.stringify({ fromPath, toPath })
+  });
+}
+
 export async function uploadWorkspaceFiles(
   token: string,
   files: Array<{ file: File; path?: string }>,

@@ -1210,7 +1210,7 @@ button {
 
 .file-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
+  grid-template-columns: auto minmax(0, 1fr);
   align-items: center;
   gap: 5px;
   min-height: 30px;
@@ -1222,6 +1222,10 @@ button {
 .file-row:hover,
 .file-row.selected {
   background: var(--sidebar-hover);
+}
+
+.file-row[draggable="true"] {
+  cursor: pointer;
 }
 
 .file-icon {
@@ -1273,6 +1277,37 @@ button {
   color: var(--muted);
   font-size: 12px;
   padding: 10px 12px 14px;
+}
+
+.workspace-context-menu {
+  position: fixed;
+  z-index: 80;
+  min-width: 150px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: var(--shadow);
+  padding: 6px;
+}
+
+.workspace-context-menu button {
+  display: block;
+  width: 100%;
+  border-radius: 8px;
+  color: var(--muted);
+  padding: 8px 10px;
+  text-align: left;
+  font-size: 13px;
+}
+
+.workspace-context-menu button:hover {
+  background: var(--sidebar-hover);
+  color: var(--text);
+}
+
+.workspace-context-menu button.danger:hover {
+  color: var(--danger);
 }
 
 .file-preview-modal {

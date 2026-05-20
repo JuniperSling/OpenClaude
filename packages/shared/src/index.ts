@@ -147,6 +147,13 @@ export const createWorkspaceFolderRequestSchema = z.object({
 
 export type CreateWorkspaceFolderRequest = z.infer<typeof createWorkspaceFolderRequestSchema>;
 
+export const moveWorkspacePathRequestSchema = z.object({
+  fromPath: z.string().min(1).max(1024),
+  toPath: z.string().min(1).max(1024)
+});
+
+export type MoveWorkspacePathRequest = z.infer<typeof moveWorkspacePathRequestSchema>;
+
 export type WorkspaceFilesResponse = {
   root: WorkspaceFileNode;
   rootPath: string;

@@ -1,10 +1,16 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import type { WorkspaceFileNode } from "./api";
-import { createWorkspaceFolder, deleteWorkspacePath, uploadWorkspaceFiles, workspaceRawUrl } from "./api";
+import { createWorkspaceFolder, deleteWorkspacePath, moveWorkspacePath, uploadWorkspaceFiles, workspaceRawUrl } from "./api";
 import { FilePreview } from "./file-preview";
 import { FileTree } from "./file-tree";
+
+type WorkspaceContextMenu = {
+  x: number;
+  y: number;
+  node?: WorkspaceFileNode;
+};
 
 export function WorkspacePanel({
   token,
@@ -27,24 +33,41 @@ export function WorkspacePanel({
   const [previewNode, setPreviewNode] = useState<WorkspaceFileNode | undefined>();
   const [isDragging, setIsDragging] = useState(false);
   const [error, setError] = useState<string | undefined>();
+  const [contextMenu, setContextMenu] = useState<WorkspaceContextMenu | undefined>();
+  const [uploadTargetPath, setUploadTargetPath] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const folderInputRef = useRef<HTMLInputElement | null>(null);
 
-  async function uploadFiles(files: Array<{ file: File; path?: string }>) {
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(undefined);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") close();
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [contextMenu]);
+
+  async function uploadFiles(files: Array<{ file: File; path?: string }>, targetPath = "") {
     if (files.length === 0) return;
     setError(undefined);
     try {
-      await uploadWorkspaceFiles(token, files);
+      await uploadWorkspaceFiles(token, files, targetPath);
       await onRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
 
-  async function handleCreateFolder() {
+  async function handleCreateFolder(targetPath = "") {
     const name = window.prompt("文件夹名称");
     if (!name?.trim()) return;
     try {
-      await createWorkspaceFolder(token, name.trim());
+      await createWorkspaceFolder(token, joinWorkspacePath(targetPath, name.trim()));
       await onRefresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -61,6 +84,43 @@ export function WorkspacePanel({
     }
   }
 
+  async function handleMove(fromPath: string, targetDirectory: string) {
+    const destination = joinWorkspacePath(targetDirectory, workspaceBasename(fromPath));
+    if (!destination || destination === fromPath || targetDirectory.startsWith(`${fromPath}/`)) return;
+    try {
+      await moveWorkspacePath(token, fromPath, destination);
+      await onRefresh();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  function handleContextMenu(event: MouseEvent, node?: WorkspaceFileNode) {
+    event.preventDefault();
+    event.stopPropagation();
+    setSelectedNode(node);
+    setContextMenu({ x: event.clientX, y: event.clientY, node });
+  }
+
+  function targetDirectoryFor(node?: WorkspaceFileNode) {
+    if (!node) return "";
+    return node.type === "directory" ? node.path : workspaceDirname(node.path);
+  }
+
+  function startUpload(targetPath: string, kind: "file" | "folder") {
+    setUploadTargetPath(targetPath);
+    setContextMenu(undefined);
+    if (kind === "folder") {
+      folderInputRef.current?.click();
+    } else {
+      fileInputRef.current?.click();
+    }
+  }
+
+  function openDownload(path: string) {
+    window.open(workspaceRawUrl(path, token), "_blank", "noopener,noreferrer");
+  }
+
   return (
     <aside className={`workspace-panel ${isOpen ? "open" : ""}`}>
       <header className="workspace-header">
@@ -72,14 +132,6 @@ export function WorkspacePanel({
           ×
         </button>
       </header>
-      <div className="workspace-toolbar">
-        <button type="button" onClick={() => fileInputRef.current?.click()}>
-          上传
-        </button>
-        <button type="button" onClick={handleCreateFolder}>
-          新建文件夹
-        </button>
-      </div>
       <input
         ref={fileInputRef}
         type="file"
@@ -88,14 +140,40 @@ export function WorkspacePanel({
         onChange={(event) => {
           const files = Array.from(event.target.files ?? []).map((file) => ({ file, path: file.name }));
           event.target.value = "";
-          void uploadFiles(files);
+          void uploadFiles(files, uploadTargetPath);
+          setUploadTargetPath("");
+        }}
+      />
+      <input
+        ref={folderInputRef}
+        type="file"
+        multiple
+        style={{ display: "none" }}
+        {...{ webkitdirectory: "", directory: "" }}
+        onChange={(event) => {
+          const files = Array.from(event.target.files ?? []).map((file) => {
+            const withRelativePath = file as File & { webkitRelativePath?: string };
+            return { file, path: withRelativePath.webkitRelativePath || file.name };
+          });
+          event.target.value = "";
+          void uploadFiles(files, uploadTargetPath);
+          setUploadTargetPath("");
         }}
       />
       <div
         className={`workspace-drop ${isDragging ? "dragging" : ""}`}
+        onContextMenu={(event) => handleContextMenu(event)}
         onDragOver={(event) => {
-          if (!event.dataTransfer.types.includes("Files")) return;
+          if (
+            !event.dataTransfer.types.includes("Files") &&
+            !event.dataTransfer.types.includes("application/x-openclaude-workspace-move")
+          ) {
+            return;
+          }
           event.preventDefault();
+          event.dataTransfer.dropEffect = event.dataTransfer.types.includes("application/x-openclaude-workspace-move")
+            ? "move"
+            : "copy";
           setIsDragging(true);
         }}
         onDragLeave={(event) => {
@@ -105,7 +183,12 @@ export function WorkspacePanel({
         onDrop={(event) => {
           event.preventDefault();
           setIsDragging(false);
-          void collectDroppedFiles(event.dataTransfer).then(uploadFiles);
+          const movingPath = event.dataTransfer.getData("application/x-openclaude-workspace-move");
+          if (movingPath) {
+            void handleMove(movingPath, "");
+            return;
+          }
+          void collectDroppedFiles(event.dataTransfer).then((files) => uploadFiles(files, ""));
         }}
       >
         <div className="workspace-tree-wrap compact-scroll">
@@ -113,12 +196,13 @@ export function WorkspacePanel({
             <FileTree
               node={root}
               selectedPath={selectedNode?.path}
-              token={token}
-              onSelect={setSelectedNode}
+              onSelect={(node) => setSelectedNode(node)}
               onOpenPreview={setPreviewNode}
-              onInsertReference={onInsertReference}
-              onDelete={handleDelete}
-              rawUrl={workspaceRawUrl}
+              onContextMenu={handleContextMenu}
+              onMove={handleMove}
+              onUploadToDirectory={(dataTransfer, targetPath) => {
+                void collectDroppedFiles(dataTransfer).then((files) => uploadFiles(files, targetPath));
+              }}
             />
           ) : (
             <div className="workspace-empty">正在加载 Workspace...</div>
@@ -126,7 +210,74 @@ export function WorkspacePanel({
         </div>
       </div>
       {error ? <div className="workspace-error">{error}</div> : null}
-      <div className="workspace-hint">双击文件打开预览</div>
+      <div className="workspace-hint">单击文件预览，右键打开菜单，拖拽文件可移动</div>
+      {contextMenu ? (
+        <div
+          className="workspace-context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          {contextMenu.node?.type === "file" ? (
+            <>
+              <button
+                type="button"
+                onClick={() => {
+                  if (contextMenu.node) setPreviewNode(contextMenu.node);
+                  setContextMenu(undefined);
+                }}
+              >
+                打开预览
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (contextMenu.node) onInsertReference(contextMenu.node.path);
+                  setContextMenu(undefined);
+                }}
+              >
+                引用
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  if (contextMenu.node) openDownload(contextMenu.node.path);
+                  setContextMenu(undefined);
+                }}
+              >
+                下载
+              </button>
+            </>
+          ) : null}
+          <button
+            type="button"
+            onClick={() => {
+              const target = targetDirectoryFor(contextMenu.node);
+              setContextMenu(undefined);
+              void handleCreateFolder(target);
+            }}
+          >
+            新建文件夹
+          </button>
+          <button type="button" onClick={() => startUpload(targetDirectoryFor(contextMenu.node), "file")}>
+            上传文件
+          </button>
+          <button type="button" onClick={() => startUpload(targetDirectoryFor(contextMenu.node), "folder")}>
+            上传文件夹
+          </button>
+          {contextMenu.node?.path ? (
+            <button
+              className="danger"
+              type="button"
+              onClick={() => {
+                void handleDelete(contextMenu.node!.path);
+                setContextMenu(undefined);
+              }}
+            >
+              删除
+            </button>
+          ) : null}
+        </div>
+      ) : null}
       {previewNode ? (
         <div className="file-preview-modal" role="dialog" aria-modal="true" aria-label={`预览 ${previewNode.name}`}>
           <div className="file-preview-dialog">
@@ -186,4 +337,20 @@ async function collectEntry(entry: DroppedFileSystemEntry, parentPath: string): 
   const children = await new Promise<DroppedFileSystemEntry[]>((resolve, reject) => reader.readEntries(resolve, reject));
   const nested = await Promise.all(children.map((child) => collectEntry(child, entryPath)));
   return nested.flat();
+}
+
+function joinWorkspacePath(basePath: string, name: string): string {
+  const cleanBase = basePath.replace(/^\/+|\/+$/g, "");
+  const cleanName = name.replace(/^\/+|\/+$/g, "");
+  return cleanBase ? `${cleanBase}/${cleanName}` : cleanName;
+}
+
+function workspaceBasename(filePath: string): string {
+  return filePath.split("/").filter(Boolean).pop() ?? filePath;
+}
+
+function workspaceDirname(filePath: string): string {
+  const parts = filePath.split("/").filter(Boolean);
+  parts.pop();
+  return parts.join("/");
 }
