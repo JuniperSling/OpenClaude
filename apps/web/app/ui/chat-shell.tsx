@@ -160,7 +160,7 @@ export function ChatShell() {
   // Mirror the latest active run id so async WebSocket envelopes can be
   // matched even after the user switches sessions and the React state has
   // already moved on.
-  const activeRunIdRef = useRef<string | undefined>();
+  const activeRunIdRef = useRef<string | undefined>(undefined);
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId),
