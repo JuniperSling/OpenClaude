@@ -51,7 +51,16 @@ export type ClaudeAgentRuntimeOptions = {
   provider?: Exclude<AgentProvider, "mock">;
   wallClockTimeoutMs?: number;
   maxTurns?: number;
+  systemPromptAppend?: string;
 };
+
+const DEFAULT_SYSTEM_PROMPT_APPEND = `You are running inside OpenClaude, a hosted assistant.
+
+Filesystem rules:
+- Your current working directory (cwd) is the user's Workspace. Files in cwd are visible to the user in the right-hand file browser. ALL user-facing outputs (PDFs, TXTs, code, reports, datasets, etc.) MUST be written to cwd or one of its subdirectories.
+- $HOME is private scratch space (caches, downloaded packages, virtualenvs, tooling configs); the user cannot see it. Never write user-deliverable files to $HOME, ~, /tmp, or anywhere outside cwd. Do NOT create virtualenvs or node_modules inside cwd.
+
+You have full root access on the host, so \`apt-get install\`, \`pip install\`, and \`npm install -g\` all work directly. Anything you install persists for future runs.`;
 
 export class ClaudeAgentRuntime implements AgentRuntime {
   constructor(private readonly options: ClaudeAgentRuntimeOptions) {}
@@ -101,6 +110,11 @@ export class ClaudeAgentRuntime implements AgentRuntime {
           ...process.env,
           HOME: input.sharedHomePath,
           CLAUDE_CONFIG_DIR: input.sdkSessionStoragePath,
+          // Run system-level pip without PEP 668 protection so the model can
+          // `pip install` directly. The agent process owns root so this is
+          // already permissible; this just removes the friendly warning.
+          PIP_BREAK_SYSTEM_PACKAGES: "1",
+          PIP_DISABLE_PIP_VERSION_CHECK: "1",
           ANTHROPIC_BASE_URL: this.options.baseUrl ?? "https://openrouter.ai/api",
           ANTHROPIC_AUTH_TOKEN: this.options.openRouterApiKey ?? "",
           ANTHROPIC_API_KEY: "",
@@ -110,6 +124,11 @@ export class ClaudeAgentRuntime implements AgentRuntime {
         maxTurns: this.options.maxTurns ?? 60,
         includePartialMessages: true,
         tools: { type: "preset", preset: "claude_code" },
+        systemPrompt: {
+          type: "preset",
+          preset: "claude_code",
+          append: this.options.systemPromptAppend ?? DEFAULT_SYSTEM_PROMPT_APPEND
+        },
         permissionMode: "bypassPermissions",
         allowDangerouslySkipPermissions: true,
         settingSources: ["project"],

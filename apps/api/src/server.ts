@@ -40,6 +40,7 @@ const runtime =
         baseUrl: config.anthropicBaseUrl,
         wallClockTimeoutMs: config.wallClockTimeoutMs,
         maxTurns: config.agentMaxTurns,
+        systemPromptAppend: config.agentSystemPromptAppend,
         provider: "openrouter"
       })
     : new MockAgentRuntime();
