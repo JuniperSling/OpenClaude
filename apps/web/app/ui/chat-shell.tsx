@@ -11,12 +11,18 @@ import {
   getModels,
   getSessionHistory,
   getSessions,
+  listWorkspaceFiles,
   login,
   uploadAttachments,
+  uploadWorkspaceFiles,
   type ModelOption,
   type StoredHistoryMessage,
-  type StoredRunMeta
+  type StoredRunMeta,
+  type WorkspaceFileNode
 } from "./api";
+import { flattenWorkspaceFiles } from "./file-tree";
+import { MentionAutocomplete } from "./mention-autocomplete";
+import { WorkspacePanel, collectDroppedFiles } from "./workspace-panel";
 
 type TextMessage = {
   id: string;
@@ -76,6 +82,12 @@ type PendingImage = {
   error?: string;
 };
 
+type MentionState = {
+  start: number;
+  end: number;
+  query: string;
+};
+
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
 function getWsBaseUrl() {
@@ -111,7 +123,12 @@ export function ChatShell() {
   const [askCustomAnswer, setAskCustomAnswer] = useState("");
   const [pendingImages, setPendingImages] = useState<PendingImage[]>([]);
   const [isDragging, setIsDragging] = useState(false);
+  const [workspaceRoot, setWorkspaceRoot] = useState<WorkspaceFileNode | undefined>();
+  const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
+  const [fileRefs, setFileRefs] = useState<string[]>([]);
+  const [mentionState, setMentionState] = useState<MentionState | undefined>();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const chatEndRef = useRef<HTMLDivElement | null>(null);
   const chatLogRef = useRef<HTMLElement | null>(null);
@@ -126,6 +143,7 @@ export function ChatShell() {
     () => sessions.find((session) => session.id === activeSessionId),
     [activeSessionId, sessions]
   );
+  const workspaceFiles = useMemo(() => flattenWorkspaceFiles(workspaceRoot), [workspaceRoot]);
 
   useEffect(() => {
     const saved = window.localStorage.getItem("openclaude.token");
@@ -153,9 +171,19 @@ export function ChatShell() {
     setSessions(result.sessions);
   }, [token]);
 
+  const refreshWorkspaceFiles = useCallback(async () => {
+    if (!token) return;
+    const result = await listWorkspaceFiles(token);
+    setWorkspaceRoot(result.root);
+  }, [token]);
+
   useEffect(() => {
     void refreshSessions().catch((err) => setError(String(err)));
   }, [refreshSessions]);
+
+  useEffect(() => {
+    void refreshWorkspaceFiles().catch((err) => setError(String(err)));
+  }, [refreshWorkspaceFiles]);
 
   useEffect(() => {
     if (!stickToBottomRef.current) return;
@@ -302,16 +330,76 @@ export function ChatShell() {
     }
   }
 
+  function handlePromptChange(value: string, cursor: number) {
+    setPrompt(value);
+    updateMentionState(value, cursor);
+  }
+
+  function updateMentionState(value: string, cursor: number) {
+    const beforeCursor = value.slice(0, cursor);
+    const atIndex = beforeCursor.lastIndexOf("@");
+    if (atIndex === -1) {
+      setMentionState(undefined);
+      return;
+    }
+    const prefix = atIndex === 0 ? "" : beforeCursor[atIndex - 1];
+    const query = beforeCursor.slice(atIndex + 1);
+    if ((prefix && !/\s/.test(prefix)) || /\s/.test(query)) {
+      setMentionState(undefined);
+      return;
+    }
+    setMentionState({ start: atIndex, end: cursor, query });
+  }
+
+  function insertFileReference(path: string) {
+    const reference = `@${path}`;
+    setPrompt((current) => {
+      const cursor = textareaRef.current?.selectionStart ?? current.length;
+      const start = mentionState?.start ?? cursor;
+      const end = mentionState?.end ?? cursor;
+      const separator = start > 0 && !/\s/.test(current[start - 1] ?? "") ? " " : "";
+      const suffix = current[end] && !/\s/.test(current[end]) ? " " : "";
+      return `${current.slice(0, start)}${separator}${reference}${suffix}${current.slice(end)}`;
+    });
+    setFileRefs((current) => (current.includes(path) ? current : [...current, path]));
+    setMentionState(undefined);
+    requestAnimationFrame(() => textareaRef.current?.focus());
+  }
+
+  async function uploadWorkspaceReferences(files: Array<{ file: File; path?: string }>) {
+    if (!token || files.length === 0) return;
+    try {
+      const result = await uploadWorkspaceFiles(token, files);
+      await refreshWorkspaceFiles();
+      for (const file of result.files) insertFileReference(file.path);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   function handleComposerDrop(event: React.DragEvent<HTMLFormElement>) {
     event.preventDefault();
     setIsDragging(false);
+    const workspaceFile = event.dataTransfer.getData("application/x-openclaude-workspace-file");
+    if (workspaceFile) {
+      try {
+        const parsed = JSON.parse(workspaceFile) as { path?: string };
+        if (parsed.path) insertFileReference(parsed.path);
+      } catch {
+        setError("无法引用该 Workspace 文件");
+      }
+      return;
+    }
     if (event.dataTransfer?.files?.length) {
-      void ingestFiles(event.dataTransfer.files);
+      void collectDroppedFiles(event.dataTransfer).then(uploadWorkspaceReferences);
     }
   }
 
   function handleComposerDragOver(event: React.DragEvent<HTMLFormElement>) {
-    if (event.dataTransfer?.types?.includes("Files")) {
+    if (
+      event.dataTransfer?.types?.includes("Files") ||
+      event.dataTransfer?.types?.includes("application/x-openclaude-workspace-file")
+    ) {
       event.preventDefault();
       setIsDragging(true);
     }
@@ -392,6 +480,9 @@ export function ChatShell() {
     setRunMetaById({});
     setOpenRawRunId(undefined);
     setPendingImages([]);
+    setWorkspaceRoot(undefined);
+    setFileRefs([]);
+    setMentionState(undefined);
     clearPendingAsk();
     clearTextQueues();
     wsRef.current?.close();
@@ -423,6 +514,8 @@ export function ChatShell() {
     setRunMetaById({});
     setOpenRawRunId(undefined);
     setPendingImages([]);
+    setFileRefs([]);
+    setMentionState(undefined);
     setError(undefined);
     clearPendingAsk();
     clearTextQueues();
@@ -451,6 +544,8 @@ export function ChatShell() {
     clearTextQueues();
     stickToBottomRef.current = true;
     setIsAtBottom(true);
+    setFileRefs([]);
+    setMentionState(undefined);
     const cached = readConversationCache(sessionId);
     if (cached) {
       setSelectedModel(cached.selectedModel);
@@ -503,9 +598,12 @@ export function ChatShell() {
     stickToBottomRef.current = true;
     setIsAtBottom(true);
     const nextPrompt = rawPrompt.trim() || (readyImages.length > 0 ? "(image input)" : "");
+    const activeFileRefs = isAskAnswer ? [] : collectActiveFileRefs(nextPrompt, fileRefs, workspaceFiles);
     if (!overridePrompt) {
       setPrompt("");
       setPendingImages([]);
+      setFileRefs([]);
+      setMentionState(undefined);
     }
 
     try {
@@ -541,7 +639,8 @@ export function ChatShell() {
         sessionId: session.id,
         prompt: nextPrompt,
         model: selectedModel,
-        attachmentIds: readyImages.map((image) => image.attachmentId!).filter(Boolean)
+        attachmentIds: readyImages.map((image) => image.attachmentId!).filter(Boolean),
+        fileRefs: activeFileRefs
       });
       const runId = response.run.id as string;
       setActiveRunId(runId);
@@ -793,8 +892,15 @@ export function ChatShell() {
   }
 
   return (
-    <div className={`claude-shell ${isSidebarOpen ? "sidebar-open" : ""}`}>
-      <button className="mobile-scrim" aria-label="关闭侧边栏" onClick={() => setIsSidebarOpen(false)} />
+    <div className={`claude-shell ${isSidebarOpen ? "sidebar-open" : ""} ${isWorkspaceOpen ? "workspace-open" : ""}`}>
+      <button
+        className="mobile-scrim"
+        aria-label="关闭侧边栏"
+        onClick={() => {
+          setIsSidebarOpen(false);
+          setIsWorkspaceOpen(false);
+        }}
+      />
       <aside className="claude-sidebar">
         <div className="sidebar-header">
           <div className="wordmark">OpenClaude</div>
@@ -861,6 +967,9 @@ export function ChatShell() {
             </button>
             <button className="conversation-title">{activeSession?.title ?? "New chat"}</button>
           </div>
+          <button className="ghost-button workspace-toggle" type="button" onClick={() => setIsWorkspaceOpen((open) => !open)}>
+            Workspace
+          </button>
         </header>
 
         <section
@@ -993,13 +1102,14 @@ export function ChatShell() {
                 </div>
               ) : null}
               <textarea
+                ref={textareaRef}
                 placeholder={
                   pendingImages.length > 0
                     ? "Describe the image..."
-                    : "Write a message, drag images here, or paste a screenshot..."
+                    : "Write a message, use @ to reference files, or drag files here..."
                 }
                 value={prompt}
-                onChange={(event) => setPrompt(event.target.value)}
+                onChange={(event) => handlePromptChange(event.target.value, event.target.selectionStart)}
                 onPaste={handleComposerPaste}
                 onKeyDown={(event) => {
                   if (event.key === "Enter" && !event.shiftKey) {
@@ -1008,6 +1118,9 @@ export function ChatShell() {
                   }
                 }}
               />
+              {mentionState ? (
+                <MentionAutocomplete query={mentionState.query} files={workspaceFiles} onSelect={insertFileReference} />
+              ) : null}
               <input
                 type="file"
                 ref={fileInputRef}
@@ -1062,6 +1175,16 @@ export function ChatShell() {
           )}
         </div>
       </main>
+      {token ? (
+        <WorkspacePanel
+          token={token}
+          root={workspaceRoot}
+          isOpen={isWorkspaceOpen}
+          onClose={() => setIsWorkspaceOpen(false)}
+          onRefresh={refreshWorkspaceFiles}
+          onInsertReference={insertFileReference}
+        />
+      ) : null}
     </div>
   );
 }
@@ -1473,6 +1596,21 @@ function buildMessagesFromHistory(historyMessages: StoredHistoryMessage[]): Chat
 
 function attachmentUrl(sessionId: string, filename: string, token: string): string {
   return `/api/sessions/${encodeURIComponent(sessionId)}/attachments/${encodeURIComponent(filename)}?token=${encodeURIComponent(token)}`;
+}
+
+function collectActiveFileRefs(prompt: string, selectedRefs: string[], workspaceFiles: WorkspaceFileNode[]): string[] {
+  const knownPaths = new Set(workspaceFiles.map((file) => file.path));
+  const refs = new Set<string>();
+  for (const path of selectedRefs) {
+    if (prompt.includes(`@${path}`)) refs.add(path);
+  }
+  const mentionPattern = /(?:^|\s)@([^\s]+)/g;
+  let match: RegExpExecArray | null;
+  while ((match = mentionPattern.exec(prompt))) {
+    const candidate = match[1];
+    if (candidate && knownPaths.has(candidate)) refs.add(candidate);
+  }
+  return [...refs];
 }
 
 function appendEnvelopeToMessageList(

@@ -1,5 +1,5 @@
 import http from "node:http";
-import { mkdir, rename, stat } from "node:fs/promises";
+import { lstat, mkdir, readdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import cors from "cors";
 import express from "express";
@@ -9,14 +9,18 @@ import { v4 as uuid } from "uuid";
 import { ClaudeAgentRuntime, MockAgentRuntime } from "@openclaude/agent-runtime";
 import { DEFAULT_MODEL_ID, EFFORT_LEVELS, models } from "@openclaude/model-registry";
 import {
+  createWorkspaceFolderRequestSchema,
   createRunRequestSchema,
   createSessionRequestSchema,
   loginRequestSchema,
+  workspacePathSchema,
   type Run,
   type Session,
-  type Workspace
+  type Workspace,
+  type WorkspaceFileNode,
+  type WorkspaceFilePreviewType
 } from "@openclaude/shared";
-import { LocalWorkspaceManager } from "@openclaude/sandbox";
+import { LocalWorkspaceManager, WorkspacePathGuard } from "@openclaude/sandbox";
 import { authenticate, signToken } from "./auth.js";
 import { config } from "./config.js";
 import { RunRegistry } from "./run-registry.js";
@@ -97,6 +101,10 @@ app.use("/api", authenticate(store));
 
 const STAGING_DIR_NAME = "staging";
 const SUPPORTED_UPLOAD_PREFIX = "image/";
+const MAX_WORKSPACE_UPLOAD_BYTES = 50 * 1024 * 1024;
+const MAX_WORKSPACE_PREVIEW_BYTES = 1024 * 1024;
+const MAX_WORKSPACE_UPLOAD_FILES = 50;
+const MAX_WORKSPACE_TREE_NODES = 1000;
 
 const uploadStorage = multer.diskStorage({
   destination: async (request, _file, cb) => {
@@ -126,6 +134,11 @@ const uploadMiddleware = multer({
   }
 });
 
+const workspaceUploadMiddleware = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_WORKSPACE_UPLOAD_BYTES, files: MAX_WORKSPACE_UPLOAD_FILES }
+});
+
 app.post(
   "/api/uploads",
   (request, response, next) => {
@@ -150,6 +163,163 @@ app.post(
   }
 );
 
+app.get("/api/workspace/files", async (request, response, next) => {
+  try {
+    const parsed = workspacePathSchema.safeParse(typeof request.query.path === "string" ? request.query.path : "");
+    if (!parsed.success) {
+      response.status(400).json({ error: parsed.error.flatten() });
+      return;
+    }
+    const workspace = await getOrCreateGlobalWorkspace(request.user!.id);
+    const target = resolveWorkspacePath(workspace.rootPath, parsed.data ?? "");
+    const root = await buildWorkspaceNode(workspace.rootPath, target.absolutePath, target.relativePath, { count: 0 });
+    response.json({ root });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/workspace/files/content", async (request, response, next) => {
+  try {
+    const parsed = workspacePathSchema.safeParse(typeof request.query.path === "string" ? request.query.path : "");
+    if (!parsed.success || !parsed.data) {
+      response.status(400).json({ error: parsed.success ? "Missing path" : parsed.error.flatten() });
+      return;
+    }
+    const workspace = await getOrCreateGlobalWorkspace(request.user!.id);
+    const target = resolveWorkspacePath(workspace.rootPath, parsed.data);
+    const info = await lstat(target.absolutePath);
+    if (info.isSymbolicLink() || !info.isFile()) {
+      response.status(400).json({ error: "Path is not a file" });
+      return;
+    }
+    if (info.size > MAX_WORKSPACE_PREVIEW_BYTES) {
+      response.status(413).json({ error: "File is too large to preview" });
+      return;
+    }
+    const previewType = previewTypeForPath(target.absolutePath);
+    if (!["text", "markdown", "code"].includes(previewType)) {
+      response.status(400).json({ error: "File type is not text-previewable" });
+      return;
+    }
+    response.json({
+      path: target.relativePath,
+      name: path.basename(target.absolutePath),
+      mimeType: mimeFromExt(path.extname(target.absolutePath).toLowerCase()),
+      previewType,
+      content: await readFile(target.absolutePath, "utf8"),
+      sizeBytes: info.size,
+      updatedAt: info.mtime.toISOString()
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get("/api/workspace/files/raw", async (request, response, next) => {
+  try {
+    const parsed = workspacePathSchema.safeParse(typeof request.query.path === "string" ? request.query.path : "");
+    if (!parsed.success || !parsed.data) {
+      response.status(400).json({ error: parsed.success ? "Missing path" : parsed.error.flatten() });
+      return;
+    }
+    const workspace = await getOrCreateGlobalWorkspace(request.user!.id);
+    const target = resolveWorkspacePath(workspace.rootPath, parsed.data);
+    const info = await lstat(target.absolutePath);
+    if (info.isSymbolicLink() || !info.isFile()) {
+      response.status(400).json({ error: "Path is not a file" });
+      return;
+    }
+    response.sendFile(target.absolutePath, {
+      headers: {
+        "Cache-Control": "private, max-age=300"
+      }
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post(
+  "/api/workspace/files/upload",
+  (request, response, next) => {
+    workspaceUploadMiddleware.array("files", MAX_WORKSPACE_UPLOAD_FILES)(request, response, (err) => {
+      if (err) {
+        response.status(400).json({ error: err instanceof Error ? err.message : String(err) });
+        return;
+      }
+      next();
+    });
+  },
+  async (request, response, next) => {
+    try {
+      const workspace = await getOrCreateGlobalWorkspace(request.user!.id);
+      const files = (request.files as Express.Multer.File[] | undefined) ?? [];
+      const targetPath = typeof request.body.targetPath === "string" ? request.body.targetPath : "";
+      const uploadedPaths = parseUploadPaths(request.body.paths);
+      const targetDir = normalizeWorkspaceRelativePath(targetPath);
+      const uploaded: Array<{ name: string; path: string; mimeType?: string; sizeBytes: number }> = [];
+      for (const [index, file] of files.entries()) {
+        const relativeUploadPath = normalizeWorkspaceRelativePath(uploadedPaths[index] || file.originalname);
+        if (!relativeUploadPath) continue;
+        const destinationRelativePath = normalizeWorkspaceRelativePath(path.posix.join(targetDir, relativeUploadPath));
+        const destination = resolveWorkspacePath(workspace.rootPath, destinationRelativePath);
+        await mkdir(path.dirname(destination.absolutePath), { recursive: true });
+        await writeFile(destination.absolutePath, file.buffer);
+        uploaded.push({
+          name: path.basename(destination.absolutePath),
+          path: destination.relativePath,
+          mimeType: file.mimetype || mimeFromExt(path.extname(destination.absolutePath).toLowerCase()),
+          sizeBytes: file.size
+        });
+      }
+      response.status(201).json({ files: uploaded });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+app.post("/api/workspace/folders", async (request, response, next) => {
+  try {
+    const parsed = createWorkspaceFolderRequestSchema.safeParse(request.body);
+    if (!parsed.success) {
+      response.status(400).json({ error: parsed.error.flatten() });
+      return;
+    }
+    const workspace = await getOrCreateGlobalWorkspace(request.user!.id);
+    const target = resolveWorkspacePath(workspace.rootPath, parsed.data.path);
+    if (!target.relativePath) {
+      response.status(400).json({ error: "Cannot create the workspace root" });
+      return;
+    }
+    await mkdir(target.absolutePath, { recursive: true });
+    response.status(201).json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete("/api/workspace/files", async (request, response, next) => {
+  try {
+    const parsed = workspacePathSchema.safeParse(typeof request.query.path === "string" ? request.query.path : "");
+    if (!parsed.success || !parsed.data) {
+      response.status(400).json({ error: parsed.success ? "Missing path" : parsed.error.flatten() });
+      return;
+    }
+    const workspace = await getOrCreateGlobalWorkspace(request.user!.id);
+    const target = resolveWorkspacePath(workspace.rootPath, parsed.data);
+    if (!target.relativePath) {
+      response.status(400).json({ error: "Cannot delete the workspace root" });
+      return;
+    }
+    await rm(target.absolutePath, { recursive: true, force: true });
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get("/api/me", (request, response) => {
   response.json({ user: request.user });
 });
@@ -166,25 +336,14 @@ app.post("/api/sessions", async (request, response, next) => {
       return;
     }
 
-    const workspaceId = uuid();
-    const layout = workspaceManager.layout(request.user!.id, workspaceId);
-    const workspace: Workspace = createTimestamped({
-      id: workspaceId,
-      userId: request.user!.id,
-      name: parsed.data.workspaceName ?? parsed.data.title ?? "Default workspace",
-      rootPath: layout.workspaceRoot,
-      sharedHomePath: layout.sharedHomePath,
-      sdkSessionStoragePath: layout.sdkSessionStoragePath
-    });
-    await workspaceManager.ensureWorkspace(workspace);
-    await store.createWorkspace(workspace);
+    const workspace = await getOrCreateGlobalWorkspace(request.user!.id);
 
     const session: Session = createTimestamped({
       id: uuid(),
       userId: request.user!.id,
       workspaceId: workspace.id,
       title: parsed.data.title ?? "New chat",
-      sdkSessionStoragePath: layout.sdkSessionStoragePath,
+      sdkSessionStoragePath: workspace.sdkSessionStoragePath,
       currentModel: parsed.data.model ?? DEFAULT_MODEL_ID
     });
     await store.createSession(session);
@@ -323,6 +482,8 @@ app.post("/api/runs", async (request, response, next) => {
       }
     }
 
+    const referencedFilePaths = await resolveWorkspaceFileRefs(workspace.rootPath, parsed.data.fileRefs ?? []);
+    const promptForRun = appendWorkspaceFileRefs(parsed.data.prompt, referencedFilePaths);
     const isFirstRunInSession = store.countRunsForSession(session.id) === 0;
     const run: Run = createTimestamped({
       id: uuid(),
@@ -332,7 +493,7 @@ app.post("/api/runs", async (request, response, next) => {
       status: "queued",
       model: parsed.data.model ?? session.currentModel,
       input: {
-        prompt: parsed.data.prompt,
+        prompt: promptForRun,
         attachments: attachments.length > 0 ? attachments : undefined
       }
     });
@@ -380,6 +541,151 @@ runs.attach(server);
 server.listen(config.port, config.host, () => {
   console.log(`OpenClaude API listening on http://${config.host}:${config.port}`);
 });
+
+async function getOrCreateGlobalWorkspace(userId: string): Promise<Workspace> {
+  const layout = await workspaceManager.ensureGlobalWorkspace(userId);
+  const workspaceId = workspaceManager.globalWorkspaceId(userId);
+  const existing = store.getWorkspace(workspaceId);
+  const workspace: Workspace = existing
+    ? {
+        ...existing,
+        name: "Workspace",
+        rootPath: layout.workspaceRoot,
+        sharedHomePath: layout.sharedHomePath,
+        sdkSessionStoragePath: layout.sdkSessionStoragePath,
+        updatedAt: new Date().toISOString()
+      }
+    : createTimestamped({
+        id: workspaceId,
+        userId,
+        name: "Workspace",
+        rootPath: layout.workspaceRoot,
+        sharedHomePath: layout.sharedHomePath,
+        sdkSessionStoragePath: layout.sdkSessionStoragePath
+      });
+  await store.upsertWorkspace(workspace);
+  return workspace;
+}
+
+function normalizeWorkspaceRelativePath(input: string | undefined): string {
+  const raw = (input ?? "").replace(/\\/g, "/").trim();
+  if (!raw || raw === ".") return "";
+  if (raw.includes("\0") || raw.startsWith("/") || path.isAbsolute(raw)) {
+    throw new Error("Invalid workspace path");
+  }
+  const normalized = path.posix.normalize(raw);
+  if (normalized === ".") return "";
+  if (normalized === ".." || normalized.startsWith("../")) {
+    throw new Error("Invalid workspace path");
+  }
+  return normalized;
+}
+
+function resolveWorkspacePath(rootPath: string, relativePath: string) {
+  const normalized = normalizeWorkspaceRelativePath(relativePath);
+  const guard = new WorkspacePathGuard(rootPath);
+  return {
+    relativePath: normalized,
+    absolutePath: guard.resolveInside(normalized)
+  };
+}
+
+async function buildWorkspaceNode(
+  workspaceRoot: string,
+  absolutePath: string,
+  relativePath: string,
+  counter: { count: number }
+): Promise<WorkspaceFileNode> {
+  const info = await lstat(absolutePath);
+  const name = relativePath ? path.basename(relativePath) : "workspace";
+  counter.count += 1;
+  if (!info.isDirectory()) {
+    return {
+      name,
+      path: relativePath,
+      type: "file",
+      sizeBytes: info.size,
+      updatedAt: info.mtime.toISOString(),
+      mimeType: mimeFromExt(path.extname(absolutePath).toLowerCase()),
+      previewType: previewTypeForPath(absolutePath)
+    };
+  }
+
+  const entries = await readdir(absolutePath, { withFileTypes: true });
+  const children: WorkspaceFileNode[] = [];
+  for (const entry of entries.sort((a, b) => Number(b.isDirectory()) - Number(a.isDirectory()) || a.name.localeCompare(b.name))) {
+    if (counter.count >= MAX_WORKSPACE_TREE_NODES) break;
+    if (entry.name === ".DS_Store") continue;
+    const childAbsolutePath = path.join(absolutePath, entry.name);
+    const childRelativePath = normalizeWorkspaceRelativePath(path.relative(workspaceRoot, childAbsolutePath));
+    children.push(await buildWorkspaceNode(workspaceRoot, childAbsolutePath, childRelativePath, counter));
+  }
+  return {
+    name,
+    path: relativePath,
+    type: "directory",
+    updatedAt: info.mtime.toISOString(),
+    children
+  };
+}
+
+function parseUploadPaths(raw: unknown): string[] {
+  if (typeof raw !== "string" || !raw.trim()) return [];
+  const parsed = JSON.parse(raw) as unknown;
+  return Array.isArray(parsed) ? parsed.map((value) => (typeof value === "string" ? value : "")) : [];
+}
+
+async function resolveWorkspaceFileRefs(workspaceRoot: string, fileRefs: string[]): Promise<string[]> {
+  const resolved: string[] = [];
+  for (const ref of [...new Set(fileRefs)]) {
+    const target = resolveWorkspacePath(workspaceRoot, ref);
+    const info = await stat(target.absolutePath);
+    if (!info.isFile()) throw new Error(`Referenced workspace path is not a file: ${ref}`);
+    resolved.push(target.absolutePath);
+  }
+  return resolved;
+}
+
+function appendWorkspaceFileRefs(prompt: string, absolutePaths: string[]): string {
+  if (absolutePaths.length === 0) return prompt;
+  return `${prompt.trimEnd()}\n\nReferenced workspace files:\n${absolutePaths.map((filePath) => `- ${filePath}`).join("\n")}`;
+}
+
+function previewTypeForPath(filePath: string): WorkspaceFilePreviewType {
+  const ext = path.extname(filePath).toLowerCase();
+  if ([".md", ".markdown", ".mdx"].includes(ext)) return "markdown";
+  if ([".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic", ".heif"].includes(ext)) return "image";
+  if (ext === ".pdf") return "pdf";
+  if (
+    [
+      ".ts",
+      ".tsx",
+      ".js",
+      ".jsx",
+      ".json",
+      ".css",
+      ".html",
+      ".py",
+      ".go",
+      ".rs",
+      ".java",
+      ".cpp",
+      ".c",
+      ".h",
+      ".hpp",
+      ".sh",
+      ".yml",
+      ".yaml",
+      ".toml",
+      ".xml",
+      ".sql"
+    ].includes(ext)
+  ) {
+    return "code";
+  }
+  if ([".txt", ".log", ".csv"].includes(ext)) return "text";
+  return "unsupported";
+}
 
 function loginAttemptKey(request: express.Request, username: string) {
   return `${request.ip}:${username.trim().toLowerCase()}`;
@@ -591,6 +897,27 @@ function mimeFromExt(ext: string): string | undefined {
       return "image/heic";
     case ".heif":
       return "image/heif";
+    case ".pdf":
+      return "application/pdf";
+    case ".md":
+    case ".markdown":
+      return "text/markdown; charset=utf-8";
+    case ".txt":
+    case ".log":
+      return "text/plain; charset=utf-8";
+    case ".json":
+      return "application/json; charset=utf-8";
+    case ".js":
+    case ".jsx":
+    case ".ts":
+    case ".tsx":
+      return "text/javascript; charset=utf-8";
+    case ".css":
+      return "text/css; charset=utf-8";
+    case ".html":
+      return "text/html; charset=utf-8";
+    case ".csv":
+      return "text/csv; charset=utf-8";
     default:
       return undefined;
   }

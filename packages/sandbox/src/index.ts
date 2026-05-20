@@ -8,6 +8,7 @@ export type WorkspaceLayout = {
   sdkSessionStoragePath: string;
   workspacesRoot: string;
   workspaceRoot: string;
+  globalWorkspacePath: string;
 };
 
 export type SkillProjection = {
@@ -50,23 +51,66 @@ export class LocalWorkspaceManager {
     const sdkSessionStoragePath = path.join(userRoot, "claude");
     const workspacesRoot = path.join(userRoot, "workspaces");
     const workspaceRoot = path.join(workspacesRoot, workspaceId);
+    return this.buildLayout(userRoot, sharedHomePath, sdkSessionStoragePath, workspacesRoot, workspaceRoot);
+  }
+
+  globalLayout(userId: string): WorkspaceLayout {
+    const userRoot = path.resolve(this.dataDir, "users", userId);
+    const sharedHomePath = path.join(userRoot, "home");
+    const sdkSessionStoragePath = path.join(userRoot, "claude");
+    const workspacesRoot = path.join(userRoot, "workspaces");
+    const workspaceRoot = path.join(userRoot, "workspace");
+    return this.buildLayout(userRoot, sharedHomePath, sdkSessionStoragePath, workspacesRoot, workspaceRoot);
+  }
+
+  globalWorkspaceId(userId: string): string {
+    const safeUserId = userId.replace(/[^a-zA-Z0-9_-]+/g, "_").slice(0, 80) || "user";
+    return `global-${safeUserId}`;
+  }
+
+  async ensureGlobalWorkspace(userId: string): Promise<WorkspaceLayout> {
+    const layout = this.globalLayout(userId);
+    await this.ensureLayout(layout);
+    return layout;
+  }
+
+  private buildLayout(
+    userRoot: string,
+    sharedHomePath: string,
+    sdkSessionStoragePath: string,
+    workspacesRoot: string,
+    workspaceRoot: string
+  ): WorkspaceLayout {
     return {
       userRoot,
       sharedHomePath,
       sdkSessionStoragePath,
       workspacesRoot,
-      workspaceRoot
+      workspaceRoot,
+      globalWorkspacePath: path.join(userRoot, "workspace")
     };
   }
 
-  async ensureWorkspace(workspace: Pick<Workspace, "id" | "userId">): Promise<WorkspaceLayout> {
-    const layout = this.layout(workspace.userId, workspace.id);
+  async ensureWorkspace(workspace: Pick<Workspace, "id" | "userId"> & Partial<Pick<Workspace, "rootPath">>): Promise<WorkspaceLayout> {
+    const layout = workspace.rootPath
+      ? this.buildLayout(
+          path.resolve(this.dataDir, "users", workspace.userId),
+          path.join(path.resolve(this.dataDir, "users", workspace.userId), "home"),
+          path.join(path.resolve(this.dataDir, "users", workspace.userId), "claude"),
+          path.join(path.resolve(this.dataDir, "users", workspace.userId), "workspaces"),
+          workspace.rootPath
+        )
+      : this.layout(workspace.userId, workspace.id);
+    await this.ensureLayout(layout);
+    return layout;
+  }
+
+  private async ensureLayout(layout: WorkspaceLayout): Promise<void> {
     await mkdir(path.join(layout.workspaceRoot, "uploads"), { recursive: true });
     await mkdir(path.join(layout.workspaceRoot, "files"), { recursive: true });
     await mkdir(path.join(layout.workspaceRoot, ".claude", "skills"), { recursive: true });
     await mkdir(layout.sharedHomePath, { recursive: true });
     await mkdir(layout.sdkSessionStoragePath, { recursive: true });
-    return layout;
   }
 
   async projectSkills(workspaceRoot: string, skills: SkillProjection[]): Promise<string[]> {

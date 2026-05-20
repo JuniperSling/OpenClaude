@@ -1,4 +1,14 @@
-import type { AuthResponse, CreateRunRequest, Run, RunSnapshot, SessionWithWorkspace } from "@openclaude/shared";
+import type {
+  AuthResponse,
+  CreateRunRequest,
+  Run,
+  RunSnapshot,
+  SessionWithWorkspace,
+  WorkspaceFileContentResponse,
+  WorkspaceFileNode,
+  WorkspaceFilesResponse,
+  WorkspaceUploadResponse
+} from "@openclaude/shared";
 
 export type ModelOption = {
   id: string;
@@ -121,6 +131,60 @@ export async function deleteSession(token: string, sessionId: string): Promise<{
     method: "DELETE"
   });
 }
+
+export async function listWorkspaceFiles(token: string, path = ""): Promise<WorkspaceFilesResponse> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : "";
+  return request(`/api/workspace/files${query}`, { token });
+}
+
+export async function getWorkspaceFileContent(
+  token: string,
+  path: string
+): Promise<WorkspaceFileContentResponse> {
+  return request(`/api/workspace/files/content?path=${encodeURIComponent(path)}`, { token });
+}
+
+export async function createWorkspaceFolder(token: string, path: string): Promise<{ ok: true }> {
+  return request("/api/workspace/folders", {
+    token,
+    method: "POST",
+    body: JSON.stringify({ path })
+  });
+}
+
+export async function deleteWorkspacePath(token: string, path: string): Promise<{ ok: true }> {
+  return request(`/api/workspace/files?path=${encodeURIComponent(path)}`, {
+    token,
+    method: "DELETE"
+  });
+}
+
+export async function uploadWorkspaceFiles(
+  token: string,
+  files: Array<{ file: File; path?: string }>,
+  targetPath = ""
+): Promise<WorkspaceUploadResponse> {
+  const formData = new FormData();
+  formData.set("targetPath", targetPath);
+  formData.set("paths", JSON.stringify(files.map((item) => item.path ?? item.file.name)));
+  for (const item of files) formData.append("files", item.file, item.file.name);
+  const response = await fetch(`${API_BASE_URL}/api/workspace/files/upload`, {
+    method: "POST",
+    headers: { authorization: `Bearer ${token}` },
+    body: formData
+  });
+  if (!response.ok) {
+    const detail = await response.text();
+    throw new Error(detail || response.statusText);
+  }
+  return response.json() as Promise<WorkspaceUploadResponse>;
+}
+
+export function workspaceRawUrl(path: string, token: string): string {
+  return `${API_BASE_URL}/api/workspace/files/raw?path=${encodeURIComponent(path)}&token=${encodeURIComponent(token)}`;
+}
+
+export type { WorkspaceFileContentResponse, WorkspaceFileNode };
 
 async function request<T>(path: string, options: RequestInit & { token?: string } = {}): Promise<T> {
   const headers = new Headers(options.headers);

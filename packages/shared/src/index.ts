@@ -81,6 +81,19 @@ export type RunInput = {
   }>;
 };
 
+export type WorkspaceFilePreviewType = "text" | "markdown" | "code" | "image" | "pdf" | "unsupported";
+
+export type WorkspaceFileNode = {
+  name: string;
+  path: string;
+  type: "file" | "directory";
+  sizeBytes?: number;
+  updatedAt?: string;
+  mimeType?: string;
+  previewType?: WorkspaceFilePreviewType;
+  children?: WorkspaceFileNode[];
+};
+
 export type UiHintKind = "text" | "tool" | "result" | "error" | "status";
 
 export type AgentStreamEnvelope = {
@@ -114,10 +127,42 @@ export const createRunRequestSchema = z.object({
   sessionId: z.string().min(1),
   prompt: z.string().min(1),
   model: modelIdSchema.optional(),
-  attachmentIds: z.array(z.string().min(1)).max(8).optional()
+  attachmentIds: z.array(z.string().min(1)).max(8).optional(),
+  fileRefs: z.array(z.string().min(1).max(1024)).max(20).optional()
 });
 
 export type CreateRunRequest = z.infer<typeof createRunRequestSchema>;
+
+export const workspacePathSchema = z.string().max(1024).optional();
+
+export const createWorkspaceFolderRequestSchema = z.object({
+  path: z.string().min(1).max(1024)
+});
+
+export type CreateWorkspaceFolderRequest = z.infer<typeof createWorkspaceFolderRequestSchema>;
+
+export type WorkspaceFilesResponse = {
+  root: WorkspaceFileNode;
+};
+
+export type WorkspaceFileContentResponse = {
+  path: string;
+  name: string;
+  mimeType?: string;
+  previewType: WorkspaceFilePreviewType;
+  content: string;
+  sizeBytes: number;
+  updatedAt: string;
+};
+
+export type WorkspaceUploadResponse = {
+  files: Array<{
+    name: string;
+    path: string;
+    mimeType?: string;
+    sizeBytes: number;
+  }>;
+};
 
 export type AuthResponse = {
   token: string;

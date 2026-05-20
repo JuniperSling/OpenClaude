@@ -1,4 +1,4 @@
-import { mkdir, readFile, rename } from "node:fs/promises";
+import { mkdir, readFile, rename, rm } from "node:fs/promises";
 import { existsSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -110,6 +110,7 @@ export class FileStore {
     this.runColumnMigrations();
     await this.migrateLegacyStoreIfNeeded();
     await this.ensureAdminUser();
+    await this.discardLegacySessionWorkspaces();
     await this.markRunningRunsInterrupted();
   }
 
@@ -235,6 +236,11 @@ export class FileStore {
         workspace.createdAt,
         workspace.updatedAt
       );
+    return workspace;
+  }
+
+  async upsertWorkspace(workspace: Workspace) {
+    this.insertWorkspace(workspace);
     return workspace;
   }
 
@@ -560,6 +566,27 @@ export class FileStore {
         WHERE status IN ('running', 'queued')`
       )
       .run(now(), now());
+  }
+
+  private async discardLegacySessionWorkspaces() {
+    const migrated = this.database().prepare("SELECT value FROM meta WHERE key = 'global_workspace_v1'").get();
+    if (migrated) return;
+
+    const users = this.database().prepare("SELECT id FROM users").all() as Array<{ id: string }>;
+    this.database().exec("BEGIN");
+    try {
+      this.database().prepare("DELETE FROM workspaces").run();
+      this.database().prepare("INSERT OR REPLACE INTO meta (key, value) VALUES ('global_workspace_v1', ?)").run(now());
+      this.database().exec("COMMIT");
+    } catch (error) {
+      this.database().exec("ROLLBACK");
+      throw error;
+    }
+
+    for (const user of users) {
+      await rm(path.join(this.dataDir, "users", user.id, "workspaces"), { recursive: true, force: true });
+    }
+    await rm(path.join(this.dataDir, "run-events"), { recursive: true, force: true });
   }
 
   private async ensureAdminUser() {
