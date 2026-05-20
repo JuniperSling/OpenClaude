@@ -12,6 +12,12 @@ type WorkspaceContextMenu = {
   node?: WorkspaceFileNode;
 };
 
+type UploadStatus = {
+  kind: "uploading" | "success" | "error";
+  message: string;
+  percent?: number;
+};
+
 export function WorkspacePanel({
   token,
   root,
@@ -35,6 +41,8 @@ export function WorkspacePanel({
   const [error, setError] = useState<string | undefined>();
   const [contextMenu, setContextMenu] = useState<WorkspaceContextMenu | undefined>();
   const [uploadTargetPath, setUploadTargetPath] = useState("");
+  const [dropTargetPath, setDropTargetPath] = useState<string | undefined>();
+  const [uploadStatus, setUploadStatus] = useState<UploadStatus | undefined>();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const folderInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -52,14 +60,26 @@ export function WorkspacePanel({
     };
   }, [contextMenu]);
 
+  useEffect(() => {
+    if (uploadStatus?.kind !== "success") return;
+    const timer = window.setTimeout(() => setUploadStatus(undefined), 3000);
+    return () => window.clearTimeout(timer);
+  }, [uploadStatus]);
+
   async function uploadFiles(files: Array<{ file: File; path?: string }>, targetPath = "") {
     if (files.length === 0) return;
     setError(undefined);
+    setUploadStatus({ kind: "uploading", message: `正在上传 ${files.length} 个项目...`, percent: 0 });
     try {
-      await uploadWorkspaceFiles(token, files, targetPath);
+      const result = await uploadWorkspaceFiles(token, files, targetPath, ({ percent }) => {
+        setUploadStatus({ kind: "uploading", message: `正在上传 ${files.length} 个项目...`, percent });
+      });
       await onRefresh();
+      setUploadStatus({ kind: "success", message: `上传完成：${result.files.length} 个项目`, percent: 100 });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      setUploadStatus({ kind: "error", message: `上传失败：${message}` });
     }
   }
 
@@ -139,9 +159,10 @@ export function WorkspacePanel({
         style={{ display: "none" }}
         onChange={(event) => {
           const files = Array.from(event.target.files ?? []).map((file) => ({ file, path: file.name }));
+          const targetPath = uploadTargetPath;
           event.target.value = "";
-          void uploadFiles(files, uploadTargetPath);
           setUploadTargetPath("");
+          void uploadFiles(files, targetPath);
         }}
       />
       <input
@@ -155,9 +176,10 @@ export function WorkspacePanel({
             const withRelativePath = file as File & { webkitRelativePath?: string };
             return { file, path: withRelativePath.webkitRelativePath || file.name };
           });
+          const targetPath = uploadTargetPath;
           event.target.value = "";
-          void uploadFiles(files, uploadTargetPath);
           setUploadTargetPath("");
+          void uploadFiles(files, targetPath);
         }}
       />
       <div
@@ -171,18 +193,23 @@ export function WorkspacePanel({
             return;
           }
           event.preventDefault();
-          event.dataTransfer.dropEffect = event.dataTransfer.types.includes("application/x-openclaude-workspace-move")
-            ? "move"
-            : "copy";
-          setIsDragging(true);
+          if (event.dataTransfer.types.includes("application/x-openclaude-workspace-move")) {
+            event.dataTransfer.dropEffect = "move";
+            setIsDragging(false);
+          } else {
+            event.dataTransfer.dropEffect = "copy";
+            setIsDragging(true);
+          }
         }}
         onDragLeave={(event) => {
           if (event.currentTarget.contains(event.relatedTarget as Node)) return;
           setIsDragging(false);
+          setDropTargetPath(undefined);
         }}
         onDrop={(event) => {
           event.preventDefault();
           setIsDragging(false);
+          setDropTargetPath(undefined);
           const movingPath = event.dataTransfer.getData("application/x-openclaude-workspace-move");
           if (movingPath) {
             void handleMove(movingPath, "");
@@ -196,13 +223,19 @@ export function WorkspacePanel({
             <FileTree
               node={root}
               selectedPath={selectedNode?.path}
+              token={token}
+              dropTargetPath={dropTargetPath}
               onSelect={(node) => setSelectedNode(node)}
               onOpenPreview={setPreviewNode}
               onContextMenu={handleContextMenu}
+              onInsertReference={onInsertReference}
+              onDelete={handleDelete}
               onMove={handleMove}
               onUploadToDirectory={(dataTransfer, targetPath) => {
                 void collectDroppedFiles(dataTransfer).then((files) => uploadFiles(files, targetPath));
               }}
+              onDropTargetChange={setDropTargetPath}
+              rawUrl={workspaceRawUrl}
             />
           ) : (
             <div className="workspace-empty">正在加载 Workspace...</div>
@@ -210,7 +243,17 @@ export function WorkspacePanel({
         </div>
       </div>
       {error ? <div className="workspace-error">{error}</div> : null}
-      <div className="workspace-hint">单击文件预览，右键打开菜单，拖拽文件可移动</div>
+      {uploadStatus ? (
+        <div className={`workspace-upload-status ${uploadStatus.kind}`}>
+          <span>{uploadStatus.message}</span>
+          {uploadStatus.percent !== undefined ? <span>{uploadStatus.percent}%</span> : null}
+          {uploadStatus.kind === "uploading" ? (
+            <div className="workspace-upload-bar">
+              <span style={{ width: `${uploadStatus.percent ?? 12}%` }} />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {contextMenu ? (
         <div
           className="workspace-context-menu"

@@ -881,8 +881,8 @@ button {
   display: inline-flex;
   align-items: center;
   flex-wrap: wrap;
-  gap: 8px;
-  min-height: 30px;
+  gap: 5px;
+  min-height: 24px;
 }
 
 .composer-inline-text {
@@ -909,23 +909,25 @@ button {
   display: inline-flex;
   align-items: center;
   flex: 0 1 auto;
-  gap: 7px;
-  max-width: 220px;
+  min-width: 0;
+  gap: 5px;
+  max-width: 136px;
   border: 1px solid var(--border-strong);
-  border-radius: 9px;
+  border-radius: 7px;
   background: var(--surface-soft);
   color: #6f8fb7;
-  padding: 6px 8px;
-  font-size: 13px;
-  line-height: 1;
+  padding: 3px 6px;
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .file-ref-icon {
   color: #6f8fb7;
-  font-size: 15px;
+  font-size: 12px;
 }
 
 .file-ref-name {
+  max-width: 92px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -934,8 +936,8 @@ button {
 .file-ref-chip button {
   display: grid;
   place-items: center;
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   border-radius: 999px;
   color: var(--muted);
   opacity: 0;
@@ -1210,7 +1212,7 @@ button {
 
 .file-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto auto auto;
   align-items: center;
   gap: 5px;
   min-height: 30px;
@@ -1222,6 +1224,11 @@ button {
 .file-row:hover,
 .file-row.selected {
   background: var(--sidebar-hover);
+}
+
+.file-row.drop-target {
+  background: color-mix(in srgb, var(--accent) 14%, var(--sidebar-hover));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 55%, transparent);
 }
 
 .file-row[draggable="true"] {
@@ -1273,12 +1280,6 @@ button {
   padding: 10px 12px 14px;
 }
 
-.workspace-hint {
-  color: var(--muted);
-  font-size: 12px;
-  padding: 10px 12px 14px;
-}
-
 .workspace-context-menu {
   position: fixed;
   z-index: 80;
@@ -1308,6 +1309,41 @@ button {
 
 .workspace-context-menu button.danger:hover {
   color: var(--danger);
+}
+
+.workspace-upload-status {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 6px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 12px;
+  padding: 10px 12px 12px;
+}
+
+.workspace-upload-status.success {
+  color: #6f8f65;
+}
+
+.workspace-upload-status.error {
+  color: var(--danger);
+}
+
+.workspace-upload-bar {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--sidebar-hover);
+}
+
+.workspace-upload-bar span {
+  display: block;
+  height: 100%;
+  min-width: 8%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 160ms ease;
 }
 
 .file-preview-modal {

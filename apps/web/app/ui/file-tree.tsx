@@ -6,19 +6,31 @@ import type { WorkspaceFileNode } from "./api";
 export function FileTree({
   node,
   selectedPath,
+  token,
+  dropTargetPath,
   onSelect,
   onOpenPreview,
   onContextMenu,
+  onInsertReference,
+  onDelete,
   onMove,
-  onUploadToDirectory
+  onUploadToDirectory,
+  onDropTargetChange,
+  rawUrl
 }: {
   node: WorkspaceFileNode;
   selectedPath?: string;
+  token: string;
+  dropTargetPath?: string;
   onSelect: (node: WorkspaceFileNode) => void;
   onOpenPreview: (node: WorkspaceFileNode) => void;
   onContextMenu: (event: MouseEvent, node?: WorkspaceFileNode) => void;
+  onInsertReference: (path: string) => void;
+  onDelete: (path: string) => void;
   onMove: (fromPath: string, targetDirectory: string) => void;
   onUploadToDirectory: (dataTransfer: DataTransfer, targetDirectory: string) => void;
+  onDropTargetChange: (path?: string) => void;
+  rawUrl: (path: string, token: string) => string;
 }) {
   const children = node.children ?? [];
   return (
@@ -29,12 +41,18 @@ export function FileTree({
           key={child.path}
           node={child}
           selectedPath={selectedPath}
+          token={token}
+          dropTargetPath={dropTargetPath}
           depth={0}
           onSelect={onSelect}
           onOpenPreview={onOpenPreview}
           onContextMenu={onContextMenu}
+          onInsertReference={onInsertReference}
+          onDelete={onDelete}
           onMove={onMove}
           onUploadToDirectory={onUploadToDirectory}
+          onDropTargetChange={onDropTargetChange}
+          rawUrl={rawUrl}
         />
       ))}
     </div>
@@ -44,28 +62,42 @@ export function FileTree({
 function FileTreeNode({
   node,
   selectedPath,
+  token,
+  dropTargetPath,
   depth,
   onSelect,
   onOpenPreview,
   onContextMenu,
+  onInsertReference,
+  onDelete,
   onMove,
-  onUploadToDirectory
+  onUploadToDirectory,
+  onDropTargetChange,
+  rawUrl
 }: {
   node: WorkspaceFileNode;
   selectedPath?: string;
+  token: string;
+  dropTargetPath?: string;
   depth: number;
   onSelect: (node: WorkspaceFileNode) => void;
   onOpenPreview: (node: WorkspaceFileNode) => void;
   onContextMenu: (event: MouseEvent, node?: WorkspaceFileNode) => void;
+  onInsertReference: (path: string) => void;
+  onDelete: (path: string) => void;
   onMove: (fromPath: string, targetDirectory: string) => void;
   onUploadToDirectory: (dataTransfer: DataTransfer, targetDirectory: string) => void;
+  onDropTargetChange: (path?: string) => void;
+  rawUrl: (path: string, token: string) => string;
 }) {
   const isDirectory = node.type === "directory";
   const canDropInto = isDirectory;
   return (
     <div className="file-tree-node">
       <div
-        className={`file-row ${selectedPath === node.path ? "selected" : ""}`}
+        className={`file-row ${selectedPath === node.path ? "selected" : ""} ${
+          dropTargetPath === node.path ? "drop-target" : ""
+        }`}
         draggable={Boolean(node.path)}
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => {
@@ -83,15 +115,23 @@ function FileTreeNode({
         }}
         onDragOver={(event) => {
           if (!canDropInto) return;
-          if (event.dataTransfer.types.includes("Files") || event.dataTransfer.types.includes("application/x-openclaude-workspace-move")) {
+          const isWorkspaceMove = event.dataTransfer.types.includes("application/x-openclaude-workspace-move");
+          if (event.dataTransfer.types.includes("Files") || isWorkspaceMove) {
             event.preventDefault();
-            event.dataTransfer.dropEffect = event.dataTransfer.types.includes("application/x-openclaude-workspace-move") ? "move" : "copy";
+            event.stopPropagation();
+            onDropTargetChange(node.path);
+            event.dataTransfer.dropEffect = isWorkspaceMove ? "move" : "copy";
           }
+        }}
+        onDragLeave={(event) => {
+          if (!canDropInto || event.currentTarget.contains(event.relatedTarget as Node)) return;
+          onDropTargetChange(undefined);
         }}
         onDrop={(event) => {
           if (!canDropInto) return;
           event.preventDefault();
           event.stopPropagation();
+          onDropTargetChange(undefined);
           const movingPath = event.dataTransfer.getData("application/x-openclaude-workspace-move");
           if (movingPath) {
             onMove(movingPath, node.path);
@@ -106,6 +146,43 @@ function FileTreeNode({
         <span className="file-name" title={node.path}>
           {node.name}
         </span>
+        {!isDirectory ? (
+          <button
+            className="file-action"
+            type="button"
+            title="引用"
+            onClick={(event) => {
+              event.stopPropagation();
+              onInsertReference(node.path);
+            }}
+          >
+            @
+          </button>
+        ) : null}
+        {!isDirectory ? (
+          <a
+            className="file-action"
+            title="下载"
+            href={rawUrl(node.path, token)}
+            download={node.name}
+            onClick={(event) => event.stopPropagation()}
+          >
+            ↓
+          </a>
+        ) : null}
+        {node.path ? (
+          <button
+            className="file-action danger"
+            type="button"
+            title="删除"
+            onClick={(event) => {
+              event.stopPropagation();
+              onDelete(node.path);
+            }}
+          >
+            ×
+          </button>
+        ) : null}
       </div>
       {isDirectory && node.children?.length ? (
         <div>
@@ -114,12 +191,18 @@ function FileTreeNode({
               key={child.path}
               node={child}
               selectedPath={selectedPath}
+              token={token}
+              dropTargetPath={dropTargetPath}
               depth={depth + 1}
               onSelect={onSelect}
               onOpenPreview={onOpenPreview}
               onContextMenu={onContextMenu}
+              onInsertReference={onInsertReference}
+              onDelete={onDelete}
               onMove={onMove}
               onUploadToDirectory={onUploadToDirectory}
+              onDropTargetChange={onDropTargetChange}
+              rawUrl={rawUrl}
             />
           ))}
         </div>

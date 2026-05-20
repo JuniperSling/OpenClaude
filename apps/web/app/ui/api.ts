@@ -175,22 +175,39 @@ export async function moveWorkspacePath(token: string, fromPath: string, toPath:
 export async function uploadWorkspaceFiles(
   token: string,
   files: Array<{ file: File; path?: string }>,
-  targetPath = ""
+  targetPath = "",
+  onProgress?: (progress: { loaded: number; total?: number; percent?: number }) => void
 ): Promise<WorkspaceUploadResponse> {
   const formData = new FormData();
   formData.set("targetPath", targetPath);
   formData.set("paths", JSON.stringify(files.map((item) => item.path ?? item.file.name)));
   for (const item of files) formData.append("files", item.file, item.file.name);
-  const response = await fetch(`${API_BASE_URL}/api/workspace/files/upload`, {
-    method: "POST",
-    headers: { authorization: `Bearer ${token}` },
-    body: formData
+
+  return new Promise<WorkspaceUploadResponse>((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", `${API_BASE_URL}/api/workspace/files/upload`);
+    xhr.setRequestHeader("authorization", `Bearer ${token}`);
+    xhr.upload.onprogress = (event) => {
+      onProgress?.({
+        loaded: event.loaded,
+        total: event.lengthComputable ? event.total : undefined,
+        percent: event.lengthComputable ? Math.round((event.loaded / event.total) * 100) : undefined
+      });
+    };
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText) as WorkspaceUploadResponse);
+        } catch (error) {
+          reject(error);
+        }
+        return;
+      }
+      reject(new Error(xhr.responseText || xhr.statusText));
+    };
+    xhr.onerror = () => reject(new Error("Workspace upload failed"));
+    xhr.send(formData);
   });
-  if (!response.ok) {
-    const detail = await response.text();
-    throw new Error(detail || response.statusText);
-  }
-  return response.json() as Promise<WorkspaceUploadResponse>;
 }
 
 export function workspaceRawUrl(path: string, token: string): string {
