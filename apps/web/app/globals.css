@@ -1239,6 +1239,30 @@ button {
   flex-shrink: 0;
 }
 
+.workspace-upload-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 30px;
+  padding: 0 11px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 600;
+  transition: background 120ms ease, border-color 120ms ease;
+}
+
+.workspace-upload-button:hover {
+  background: var(--sidebar-hover);
+  border-color: var(--border-strong);
+}
+
+.workspace-upload-button svg {
+  display: block;
+}
+
 .workspace-path {
   display: block;
   max-width: 100%;

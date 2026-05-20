@@ -151,16 +151,17 @@ export function WorkspacePanel({
           </div>
           <div className="workspace-header-actions">
             <button
-              className="icon-button"
+              className="workspace-upload-button"
               type="button"
               aria-label="上传文件"
               title="上传文件"
               onClick={() => startUpload("", "file")}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
                 <path d="M12 19V5" />
                 <path d="m5 12 7-7 7 7" />
               </svg>
+              <span>上传</span>
             </button>
             <button className="icon-button mobile-only" type="button" aria-label="关闭 Workspace" onClick={onClose}>
               ×
