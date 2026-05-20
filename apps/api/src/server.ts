@@ -233,9 +233,12 @@ app.get("/api/workspace/files/raw", async (request, response, next) => {
       response.status(400).json({ error: "Path is not a file" });
       return;
     }
+    // no-cache (rather than no-store) so the browser still benefits from
+    // conditional GETs via ETag/Last-Modified, but never serves a stale
+    // body when the agent rewrites the same workspace path.
     response.sendFile(target.absolutePath, {
       headers: {
-        "Cache-Control": "private, max-age=300"
+        "Cache-Control": "no-cache"
       }
     });
   } catch (error) {
