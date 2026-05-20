@@ -345,6 +345,27 @@ button {
   white-space: pre-wrap;
 }
 
+.message-file-content {
+  display: inline;
+  white-space: pre-wrap;
+}
+
+.message-file-chip {
+  display: inline-flex;
+  align-items: center;
+  max-width: 150px;
+  gap: 5px;
+  margin: 0 2px;
+  padding: 3px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
+  background: var(--surface-soft);
+  color: #6f8fb7;
+  font-size: 12px;
+  line-height: 1.2;
+  vertical-align: -2px;
+}
+
 .message.assistant .message-body {
   position: relative;
   width: min(700px, calc(100% - 42px));
@@ -844,6 +865,38 @@ button {
   border-radius: 12px;
   border: 1px solid var(--border-strong);
   object-fit: cover;
+}
+
+.composer-upload-status {
+  display: grid;
+  gap: 6px;
+  padding: 10px 14px 0;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.composer-upload-status.success {
+  color: var(--accent-dark);
+}
+
+.composer-upload-status.error {
+  color: var(--danger);
+}
+
+.composer-upload-bar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-soft);
+}
+
+.composer-upload-bar span {
+  display: block;
+  height: 100%;
+  min-width: 18%;
+  border-radius: inherit;
+  background: var(--accent);
+  transition: width 120ms ease;
 }
 
 .composer-input-line {

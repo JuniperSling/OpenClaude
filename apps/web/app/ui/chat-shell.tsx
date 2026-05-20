@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AgentStreamEnvelope, RunSnapshot, SessionWithWorkspace } from "@openclaude/shared";
@@ -95,6 +95,12 @@ type FileReferenceBlock = {
   prefix: string;
 };
 
+type WorkspaceUploadStatus = {
+  kind: "uploading" | "success" | "error";
+  message: string;
+  percent?: number;
+};
+
 const MAX_IMAGE_BYTES = 25 * 1024 * 1024;
 
 function getWsBaseUrl() {
@@ -135,6 +141,7 @@ export function ChatShell() {
   const [isWorkspaceOpen, setIsWorkspaceOpen] = useState(true);
   const [fileRefs, setFileRefs] = useState<FileReferenceBlock[]>([]);
   const [mentionState, setMentionState] = useState<MentionState | undefined>();
+  const [workspaceUploadStatus, setWorkspaceUploadStatus] = useState<WorkspaceUploadStatus | undefined>();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
@@ -251,6 +258,12 @@ export function ChatShell() {
       cachedAt: Date.now()
     });
   }, [activeSessionId, messages, runMetaById, selectedModel]);
+
+  useEffect(() => {
+    if (workspaceUploadStatus?.kind !== "success") return;
+    const timer = window.setTimeout(() => setWorkspaceUploadStatus(undefined), 3000);
+    return () => window.clearTimeout(timer);
+  }, [workspaceUploadStatus]);
 
   async function handleLogin(event: React.FormEvent) {
     event.preventDefault();
@@ -410,12 +423,19 @@ export function ChatShell() {
 
   async function uploadWorkspaceReferences(files: Array<{ file: File; path?: string }>) {
     if (!token || files.length === 0) return;
+    setError(undefined);
+    setWorkspaceUploadStatus({ kind: "uploading", message: `正在上传并引用 ${files.length} 个项目...`, percent: 0 });
     try {
-      const result = await uploadWorkspaceFiles(token, files);
+      const result = await uploadWorkspaceFiles(token, files, "", ({ percent }) => {
+        setWorkspaceUploadStatus({ kind: "uploading", message: `正在上传并引用 ${files.length} 个项目...`, percent });
+      });
       await refreshWorkspaceFiles();
       for (const file of result.files) insertFileReference(file.path);
+      setWorkspaceUploadStatus({ kind: "success", message: `已引用 ${result.files.length} 个项目`, percent: 100 });
     } catch (err) {
-      setError(err instanceof Error ? err.message : String(err));
+      const message = err instanceof Error ? err.message : String(err);
+      setError(message);
+      setWorkspaceUploadStatus({ kind: "error", message: `上传失败：${message}` });
     }
   }
 
@@ -1060,7 +1080,9 @@ export function ChatShell() {
                         ))}
                       </div>
                     ) : null}
-                    {message.role === "user" || message.role === "status" ? message.content : null}
+                    {message.role === "user" || message.role === "status" ? (
+                      <MessageFileContent content={message.content} workspaceFiles={workspaceFiles} />
+                    ) : null}
                     {message.role === "assistant" && activeRunId && message.id === `assistant-${activeRunId}` ? (
                       <span className="typing-cursor" />
                     ) : null}
@@ -1145,6 +1167,16 @@ export function ChatShell() {
                       </button>
                     </div>
                   ))}
+                </div>
+              ) : null}
+              {workspaceUploadStatus ? (
+                <div className={`composer-upload-status ${workspaceUploadStatus.kind}`}>
+                  <span>{workspaceUploadStatus.message}</span>
+                  {workspaceUploadStatus.kind === "uploading" ? (
+                    <div className="composer-upload-bar" aria-hidden="true">
+                      <span style={{ width: `${workspaceUploadStatus.percent ?? 18}%` }} />
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
               <div className="composer-input-line">
@@ -1682,11 +1714,8 @@ function collectActiveFileRefs(prompt: string, selectedRefs: string[], workspace
   for (const path of selectedRefs) {
     if (knownPaths.has(path)) refs.add(path);
   }
-  const mentionPattern = /(?:^|\s)@([^\s]+)/g;
-  let match: RegExpExecArray | null;
-  while ((match = mentionPattern.exec(prompt))) {
-    const candidate = match[1];
-    if (candidate && knownPaths.has(candidate)) refs.add(candidate);
+  for (const match of findFileReferenceMatches(prompt, workspaceFiles)) {
+    refs.add(match.path);
   }
   return [...refs];
 }
@@ -1770,6 +1799,64 @@ function MarkdownContent({ content }: { content: string }) {
       <ReactMarkdown remarkPlugins={[remarkGfm]}>{content}</ReactMarkdown>
     </div>
   );
+}
+
+function MessageFileContent({ content, workspaceFiles }: { content: string; workspaceFiles: WorkspaceFileNode[] }) {
+  const visibleContent = stripReferencedWorkspaceFiles(content);
+  const matches = findFileReferenceMatches(visibleContent, workspaceFiles);
+  if (matches.length === 0) return <>{visibleContent}</>;
+
+  const parts: ReactNode[] = [];
+  let cursor = 0;
+  for (const match of matches) {
+    if (match.start > cursor) {
+      parts.push(
+        <span className="message-inline-text" key={`text-${cursor}`}>
+          {visibleContent.slice(cursor, match.start)}
+        </span>
+      );
+    }
+    parts.push(
+      <span className="message-file-chip" title={match.path} key={`file-${match.start}-${match.end}`}>
+        <span className="file-ref-icon">≡</span>
+        <span className="file-ref-name">{match.path.split("/").pop() ?? match.path}</span>
+      </span>
+    );
+    cursor = match.end;
+  }
+  if (cursor < visibleContent.length) {
+    parts.push(
+      <span className="message-inline-text" key={`text-${cursor}`}>
+        {visibleContent.slice(cursor)}
+      </span>
+    );
+  }
+  return <span className="message-file-content">{parts}</span>;
+}
+
+function stripReferencedWorkspaceFiles(content: string): string {
+  return content.replace(/\n\nReferenced workspace files:\n(?:- .+(?:\n|$))+$/u, "").trimEnd();
+}
+
+function findFileReferenceMatches(content: string, workspaceFiles: WorkspaceFileNode[]) {
+  const paths = workspaceFiles
+    .map((file) => file.path)
+    .filter(Boolean)
+    .sort((a, b) => b.length - a.length);
+  const matches: Array<{ start: number; end: number; path: string }> = [];
+  let searchFrom = 0;
+  while (searchFrom < content.length) {
+    const at = content.indexOf("@", searchFrom);
+    if (at === -1) break;
+    const path = paths.find((candidate) => content.startsWith(candidate, at + 1));
+    if (!path) {
+      searchFrom = at + 1;
+      continue;
+    }
+    matches.push({ start: at, end: at + 1 + path.length, path });
+    searchFrom = at + 1 + path.length;
+  }
+  return matches;
 }
 
 function ToolCallCard({ message }: { message: ToolMessage }) {
