@@ -215,6 +215,24 @@ export class FileStore {
     return row.count > 0;
   }
 
+  getActiveRunForSession(sessionId: string, userId: string): Run | undefined {
+    const row = this.database()
+      .prepare(
+        `SELECT * FROM runs
+         WHERE session_id = ? AND user_id = ? AND status IN ('queued', 'running')
+         ORDER BY created_at DESC LIMIT 1`
+      )
+      .get(sessionId, userId) as RunRow | undefined;
+    return row ? mapRun(row) : undefined;
+  }
+
+  getLatestEventSequence(runId: string): number {
+    const row = this.database()
+      .prepare("SELECT MAX(sequence) AS latest FROM events WHERE run_id = ?")
+      .get(runId) as { latest: number | null };
+    return row.latest ?? 0;
+  }
+
   getWorkspace(id: string) {
     const row = this.database().prepare("SELECT * FROM workspaces WHERE id = ?").get(id) as WorkspaceRow | undefined;
     return row ? mapWorkspace(row) : undefined;

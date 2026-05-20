@@ -672,10 +672,11 @@ export function ChatShell() {
     setMentionState(undefined);
     const cached = readConversationCache(sessionId);
     if (cached) {
+      // Render cache instantly for snappy switching, but always refresh from
+      // the server below in case a run is still streaming on this session.
       setSelectedModel(cached.selectedModel);
       setMessages(cached.messages);
       setRunMetaById(cached.runMetaById);
-      return;
     }
     try {
       const history = await getSessionHistory(token, sessionId);
@@ -691,6 +692,15 @@ export function ChatShell() {
         selectedModel: history.session.currentModel,
         cachedAt: Date.now()
       });
+
+      // If a run is still in flight on the server, re-attach the WebSocket so
+      // live tokens keep streaming into the now-active session.
+      if (history.activeRun) {
+        const { runId, latestSequence } = history.activeRun;
+        setActiveRunId(runId);
+        activeRunIdRef.current = runId;
+        subscribeToRun(token, runId, latestSequence);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -776,13 +786,13 @@ export function ChatShell() {
     }
   }
 
-  function subscribeToRun(nextToken: string, runId: string) {
+  function subscribeToRun(nextToken: string, runId: string, afterSequence = 0) {
     wsRef.current?.close();
     const socket = new WebSocket(`${getWsBaseUrl()}?token=${encodeURIComponent(nextToken)}`);
     wsRef.current = socket;
 
     socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({ type: "subscribe_run", runId }));
+      socket.send(JSON.stringify({ type: "subscribe_run", runId, afterSequence }));
     });
 
     socket.addEventListener("message", (event) => {

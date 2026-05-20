@@ -39,6 +39,7 @@ const runtime =
         openRouterApiKey: config.openRouterApiKey,
         baseUrl: config.anthropicBaseUrl,
         wallClockTimeoutMs: config.wallClockTimeoutMs,
+        maxTurns: config.agentMaxTurns,
         provider: "openrouter"
       })
     : new MockAgentRuntime();
@@ -412,10 +413,14 @@ app.get("/api/sessions/:sessionId/history", (request, response, next) => {
       response.status(404).json({ error: "Session not found" });
       return;
     }
+    const activeRun = store.getActiveRunForSession(session.id, request.user!.id);
     response.json({
       session,
       messages: store.listMessagesForSession(session.id, request.user!.id),
-      runMeta: store.listRunMetasForSession(session.id, request.user!.id)
+      runMeta: store.listRunMetasForSession(session.id, request.user!.id),
+      activeRun: activeRun
+        ? { runId: activeRun.id, latestSequence: store.getLatestEventSequence(activeRun.id) }
+        : undefined
     });
   } catch (error) {
     next(error);

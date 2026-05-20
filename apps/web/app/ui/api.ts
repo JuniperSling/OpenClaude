@@ -93,6 +93,7 @@ export async function getSessionHistory(
   messages?: StoredHistoryMessage[];
   runMeta?: StoredRunMeta[];
   runs?: RunSnapshot[];
+  activeRun?: { runId: string; latestSequence: number };
 }> {
   return request(`/api/sessions/${sessionId}/history`, { token });
 }

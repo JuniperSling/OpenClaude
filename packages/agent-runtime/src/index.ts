@@ -50,6 +50,7 @@ export type ClaudeAgentRuntimeOptions = {
   baseUrl?: string;
   provider?: Exclude<AgentProvider, "mock">;
   wallClockTimeoutMs?: number;
+  maxTurns?: number;
 };
 
 export class ClaudeAgentRuntime implements AgentRuntime {
@@ -106,7 +107,7 @@ export class ClaudeAgentRuntime implements AgentRuntime {
           ...getOpenRouterDefaults(input.modelId)
         },
         model: model.sdkModel,
-        maxTurns: 60,
+        maxTurns: this.options.maxTurns ?? 60,
         includePartialMessages: true,
         tools: { type: "preset", preset: "claude_code" },
         permissionMode: "bypassPermissions",
