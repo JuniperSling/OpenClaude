@@ -1128,47 +1128,47 @@ export function ChatShell() {
                   ))}
                 </div>
               ) : null}
-              {fileRefs.length > 0 ? (
-                <div className="composer-file-refs">
-                  {fileRefs.map((path) => (
-                    <span className="file-ref-chip" key={path}>
-                      <span className="file-ref-icon">≡</span>
-                      <span className="file-ref-name">{path.split("/").pop() ?? path}</span>
-                      <button type="button" aria-label={`移除 ${path}`} onClick={() => removeFileReference(path)}>
-                        ×
-                      </button>
-                    </span>
-                  ))}
-                </div>
-              ) : null}
-              <textarea
-                ref={textareaRef}
-                placeholder={
-                  pendingImages.length > 0
-                    ? "Describe the image..."
-                    : "Write a message, use @ to reference files, or drag files here..."
-                }
-                value={prompt}
-                onChange={(event) => handlePromptChange(event.target.value, event.target.selectionStart)}
-                onPaste={handleComposerPaste}
-                onKeyDown={(event) => {
-                  if (event.key === "Enter" && !event.shiftKey) {
-                    event.preventDefault();
-                    void submitPrompt();
-                    return;
+              <div className="composer-input-line">
+                {fileRefs.map((path) => (
+                  <span className="file-ref-chip" key={path}>
+                    <span className="file-ref-icon">≡</span>
+                    <span className="file-ref-name">{path.split("/").pop() ?? path}</span>
+                    <button type="button" aria-label={`移除 ${path}`} onClick={() => removeFileReference(path)}>
+                      ×
+                    </button>
+                  </span>
+                ))}
+                <textarea
+                  ref={textareaRef}
+                  placeholder={
+                    pendingImages.length > 0
+                      ? "Describe the image..."
+                      : fileRefs.length > 0
+                        ? "Add a message..."
+                        : "Write a message, use @ to reference files, or drag files here..."
                   }
-                  if (
-                    event.key === "Backspace" &&
-                    !prompt &&
-                    fileRefs.length > 0 &&
-                    textareaRef.current?.selectionStart === 0 &&
-                    textareaRef.current.selectionEnd === 0
-                  ) {
-                    event.preventDefault();
-                    removeFileReference(fileRefs[fileRefs.length - 1]!);
-                  }
-                }}
-              />
+                  value={prompt}
+                  onChange={(event) => handlePromptChange(event.target.value, event.target.selectionStart)}
+                  onPaste={handleComposerPaste}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" && !event.shiftKey) {
+                      event.preventDefault();
+                      void submitPrompt();
+                      return;
+                    }
+                    if (
+                      event.key === "Backspace" &&
+                      !prompt &&
+                      fileRefs.length > 0 &&
+                      textareaRef.current?.selectionStart === 0 &&
+                      textareaRef.current.selectionEnd === 0
+                    ) {
+                      event.preventDefault();
+                      removeFileReference(fileRefs[fileRefs.length - 1]!);
+                    }
+                  }}
+                />
+              </div>
               {mentionState ? (
                 <MentionAutocomplete query={mentionState.query} files={workspaceFiles} onSelect={insertFileReference} />
               ) : null}

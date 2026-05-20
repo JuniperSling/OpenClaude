@@ -846,22 +846,34 @@ button {
   object-fit: cover;
 }
 
-.composer textarea {
-  width: 100%;
-  min-height: 74px;
-  max-height: 220px;
+.composer-input-line {
+  display: flex;
+  align-items: flex-start;
+  flex-wrap: wrap;
+  gap: 8px;
+  min-height: 98px;
+  max-height: 240px;
+  overflow: auto;
+  padding: 14px 14px 8px;
+}
+
+.composer-input-line textarea {
+  flex: 1 1 220px;
+  min-width: 160px;
+  min-height: 34px;
+  max-height: 180px;
   resize: none;
   border: 0;
-  border-radius: 20px 20px 0 0;
+  border-radius: 0;
   background: transparent;
   color: var(--text);
-  padding: 16px 16px 8px;
+  padding: 3px 2px;
   outline: none;
   font-size: 15px;
   line-height: 1.5;
 }
 
-.composer textarea::placeholder {
+.composer-input-line textarea::placeholder {
   color: var(--muted-2);
 }
 
@@ -878,16 +890,10 @@ button {
   box-shadow: var(--shadow);
 }
 
-.composer-file-refs {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding: 12px 12px 0;
-}
-
 .file-ref-chip {
   display: inline-flex;
   align-items: center;
+  flex: 0 1 auto;
   gap: 7px;
   max-width: 220px;
   border: 1px solid var(--border-strong);
@@ -1842,7 +1848,7 @@ button {
     padding-bottom: max(14px, env(safe-area-inset-bottom));
   }
 
-  .composer textarea {
+  .composer-input-line textarea {
     min-height: 68px;
     font-size: 16px;
   }
