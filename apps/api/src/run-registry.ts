@@ -172,11 +172,31 @@ export class RunRegistry {
       .catch(async (error) => {
         const latest = this.store.getRun(run.id);
         if (!latest || terminalStatuses.has(latest.status)) return;
+        const message = error instanceof Error ? error.message : String(error);
         await this.store.updateRun(run.id, {
           status: "failed",
           finishedAt: new Date().toISOString(),
-          error: error instanceof Error ? error.message : String(error)
+          error: message
         });
+        // Broadcast a result envelope so subscribed clients exit "thinking".
+        const lastSequence = this.latestSequences.get(run.id) ?? 0;
+        await this.recordEvent(
+          {
+            version: 1,
+            runId: run.id,
+            sequence: lastSequence + 1,
+            timestamp: new Date().toISOString(),
+            provider: "openrouter",
+            sdkEvent: {
+              type: "result",
+              subtype: "error",
+              is_error: true,
+              error: message
+            },
+            uiHints: { kind: "result" }
+          },
+          eventsPath
+        );
       })
       .finally(() => {
         this.running.delete(run.id);
