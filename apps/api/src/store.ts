@@ -744,11 +744,22 @@ export class FileStore {
   }
 
   private insertWorkspace(workspace: Workspace) {
+    // IMPORTANT: do not use `INSERT OR REPLACE` here. SQLite implements
+    // `REPLACE` as DELETE + INSERT, which fires the `ON DELETE CASCADE`
+    // on `sessions.workspace_id` and wipes out every session, run,
+    // message, and event for the workspace. Use a real upsert instead.
     this.database()
       .prepare(
-        `INSERT OR REPLACE INTO workspaces (
+        `INSERT INTO workspaces (
           id, user_id, name, root_path, shared_home_path, sdk_session_storage_path, created_at, updated_at
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(id) DO UPDATE SET
+          user_id = excluded.user_id,
+          name = excluded.name,
+          root_path = excluded.root_path,
+          shared_home_path = excluded.shared_home_path,
+          sdk_session_storage_path = excluded.sdk_session_storage_path,
+          updated_at = excluded.updated_at`
       )
       .run(
         workspace.id,
