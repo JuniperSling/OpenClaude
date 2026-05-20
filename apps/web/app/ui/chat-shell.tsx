@@ -184,7 +184,7 @@ export function ChatShell() {
   const refreshSessions = useCallback(async () => {
     if (!token) return;
     const result = await getSessions(token);
-    setSessions(result.sessions);
+    setSessions((current) => mergeSessionLists(result.sessions, current));
   }, [token]);
 
   const refreshWorkspaceFiles = useCallback(async () => {
@@ -677,7 +677,7 @@ export function ChatShell() {
       if (!session) {
         const created = await createSession(token, selectedModel);
         session = created.session;
-        setSessions((current) => [created.session, ...current]);
+        setSessions((current) => mergeSessionLists([created.session], current));
         setActiveSessionId(created.session.id);
       }
       const userMessageId = crypto.randomUUID();
@@ -1698,6 +1698,13 @@ function buildMessagesFromHistory(historyMessages: StoredHistoryMessage[]): Chat
       images: images && images.length > 0 ? images : undefined
     };
   });
+}
+
+function mergeSessionLists(incoming: SessionWithWorkspace[], existing: SessionWithWorkspace[]): SessionWithWorkspace[] {
+  const byId = new Map<string, SessionWithWorkspace>();
+  for (const session of existing) byId.set(session.id, session);
+  for (const session of incoming) byId.set(session.id, session);
+  return [...byId.values()].sort((a, b) => Date.parse(b.updatedAt) - Date.parse(a.updatedAt));
 }
 
 function attachmentUrl(sessionId: string, filename: string, token: string): string {
