@@ -233,20 +233,55 @@ export function ChatShell() {
 
   useEffect(() => {
     if (!token) return;
-    const socket = new WebSocket(`${getWsBaseUrl()}?token=${encodeURIComponent(token)}`);
-    workspaceWsRef.current = socket;
-    socket.addEventListener("open", () => {
-      socket.send(JSON.stringify({ type: "subscribe_workspace" }));
-    });
-    socket.addEventListener("message", (event) => {
-      const message = JSON.parse(event.data as string) as WorkspaceChangedMessage | { type?: string };
-      if (message.type === "workspace_changed") {
+    let cancelled = false;
+    let reconnectTimer: ReturnType<typeof setTimeout> | undefined;
+    let attempt = 0;
+
+    const connect = () => {
+      if (cancelled) return;
+      const socket = new WebSocket(`${getWsBaseUrl()}?token=${encodeURIComponent(token)}`);
+      workspaceWsRef.current = socket;
+
+      socket.addEventListener("open", () => {
+        attempt = 0;
+        socket.send(JSON.stringify({ type: "subscribe_workspace" }));
+        // After reconnect we may have missed file changes that happened
+        // while the socket was down — refresh once to catch up.
         void refreshWorkspaceFiles().catch((err) => setError(String(err)));
-      }
-    });
+      });
+
+      socket.addEventListener("message", (event) => {
+        const message = JSON.parse(event.data as string) as WorkspaceChangedMessage | { type?: string };
+        if (message.type === "workspace_changed") {
+          void refreshWorkspaceFiles().catch((err) => setError(String(err)));
+        }
+      });
+
+      const scheduleReconnect = () => {
+        if (cancelled || workspaceWsRef.current !== socket) return;
+        const backoffMs = Math.min(15000, 500 * 2 ** attempt);
+        attempt += 1;
+        reconnectTimer = setTimeout(connect, backoffMs);
+      };
+
+      socket.addEventListener("close", scheduleReconnect);
+      socket.addEventListener("error", () => {
+        try {
+          socket.close();
+        } catch {
+          // ignore
+        }
+      });
+    };
+
+    connect();
+
     return () => {
-      socket.close();
-      if (workspaceWsRef.current === socket) workspaceWsRef.current = null;
+      cancelled = true;
+      if (reconnectTimer) clearTimeout(reconnectTimer);
+      const socket = workspaceWsRef.current;
+      workspaceWsRef.current = null;
+      socket?.close();
     };
   }, [token, refreshWorkspaceFiles]);
 
