@@ -17,5 +17,5 @@ export const config = {
   anthropicBaseUrl: process.env.ANTHROPIC_BASE_URL ?? "https://openrouter.ai/api",
   wallClockTimeoutMs: Number(process.env.AGENT_WALL_CLOCK_TIMEOUT_MS ?? 10 * 60 * 1000),
   corsOrigin: process.env.CORS_ORIGIN ?? "http://localhost:3000",
-  perUserConcurrentRuns: Number(process.env.PER_USER_CONCURRENT_RUNS ?? 1)
+  perUserConcurrentRuns: Number(process.env.PER_USER_CONCURRENT_RUNS ?? 4)
 };

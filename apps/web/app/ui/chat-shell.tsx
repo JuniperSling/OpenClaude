@@ -157,6 +157,10 @@ export function ChatShell() {
   const textQueues = useRef(new Map<string, string>());
   const textTimers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
   const conversationCache = useRef(new Map<string, ConversationCache>());
+  // Mirror the latest active run id so async WebSocket envelopes can be
+  // matched even after the user switches sessions and the React state has
+  // already moved on.
+  const activeRunIdRef = useRef<string | undefined>();
 
   const activeSession = useMemo(
     () => sessions.find((session) => session.id === activeSessionId),
@@ -194,6 +198,10 @@ export function ChatShell() {
       clearTextQueues();
     };
   }, []);
+
+  useEffect(() => {
+    activeRunIdRef.current = activeRunId;
+  }, [activeRunId]);
 
   useEffect(() => {
     if (typeof window === "undefined" || !window.matchMedia) return;
@@ -312,6 +320,18 @@ export function ChatShell() {
     }
     textTimers.current.clear();
     textQueues.current.clear();
+  }
+
+  // Drop any subscription / pending state attached to the current run so a
+  // newly opened session does not receive (and render) the previous run's
+  // leftover envelopes.
+  function detachActiveRun() {
+    wsRef.current?.close();
+    wsRef.current = null;
+    setActiveRunId(undefined);
+    activeRunIdRef.current = undefined;
+    streamedRunIds.current.clear();
+    clearTextQueues();
   }
 
   async function ingestFiles(files: FileList | File[]) {
@@ -613,6 +633,7 @@ export function ChatShell() {
   }
 
   async function handleCreateSession() {
+    detachActiveRun();
     setActiveSessionId(undefined);
     setMessages([]);
     setRunMetaById({});
@@ -622,7 +643,6 @@ export function ChatShell() {
     setMentionState(undefined);
     setError(undefined);
     clearPendingAsk();
-    clearTextQueues();
   }
 
   async function handleSelectSession(sessionId: string) {
@@ -636,6 +656,7 @@ export function ChatShell() {
         cachedAt: Date.now()
       });
     }
+    detachActiveRun();
     const session = sessions.find((candidate) => candidate.id === sessionId);
     setActiveSessionId(sessionId);
     setSelectedModel(session?.currentModel ?? selectedModel);
@@ -645,7 +666,6 @@ export function ChatShell() {
     setRunMetaById({});
     setOpenRawRunId(undefined);
     clearPendingAsk();
-    clearTextQueues();
     stickToBottomRef.current = true;
     setIsAtBottom(true);
     setFileRefs([]);
@@ -780,6 +800,11 @@ export function ChatShell() {
   }
 
   function appendEnvelope(envelope: AgentStreamEnvelope) {
+    // Discard events from a previous run that lingered on a stale WebSocket
+    // (e.g. user opened a new chat while the old run was still streaming).
+    if (activeRunIdRef.current && envelope.runId !== activeRunIdRef.current) {
+      return;
+    }
     const usage = extractRunUsage(envelope.sdkEvent);
     if (usage) {
       setRunMetaById((current) => ({

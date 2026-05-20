@@ -98,11 +98,32 @@ export class RunRegistry {
 
   async startRun(session: Session, run: Run, input: RunInput) {
     if (this.store.countRunningRuns(run.userId) >= config.perUserConcurrentRuns) {
+      const message = "Per-user concurrent run limit reached";
       await this.store.updateRun(run.id, {
         status: "failed",
         finishedAt: new Date().toISOString(),
-        error: "Per-user concurrent run limit reached"
+        error: message
       });
+      // Broadcast (and persist) a result envelope so the subscribing client
+      // exits its "thinking" state instead of hanging forever waiting for
+      // events that will never arrive.
+      await this.recordEvent(
+        {
+          version: 1,
+          runId: run.id,
+          sequence: 1,
+          timestamp: new Date().toISOString(),
+          provider: "openrouter",
+          sdkEvent: {
+            type: "result",
+            subtype: "error",
+            is_error: true,
+            error: message
+          },
+          uiHints: { kind: "result" }
+        },
+        path.join(config.dataDir, "run-events", `${run.id}.jsonl`)
+      );
       return;
     }
 
