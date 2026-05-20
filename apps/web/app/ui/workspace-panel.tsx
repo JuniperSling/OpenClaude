@@ -147,6 +147,18 @@ export function WorkspacePanel({
         <div>
           <strong>Workspace</strong>
           <small title={rootPath}>{rootPath ?? "正在加载路径..."}</small>
+          {uploadStatus ? (
+            <div className={`workspace-upload-status ${uploadStatus.kind}`}>
+              <span>{uploadStatus.message}</span>
+              {uploadStatus.percent !== undefined ? <span>{uploadStatus.percent}%</span> : null}
+              {uploadStatus.kind === "uploading" ? (
+                <div className="workspace-upload-bar">
+                  <span style={{ width: `${uploadStatus.percent ?? 12}%` }} />
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+          {error ? <div className="workspace-error">{error}</div> : null}
         </div>
         <button className="icon-button mobile-only" type="button" aria-label="关闭 Workspace" onClick={onClose}>
           ×
@@ -242,18 +254,6 @@ export function WorkspacePanel({
           )}
         </div>
       </div>
-      {error ? <div className="workspace-error">{error}</div> : null}
-      {uploadStatus ? (
-        <div className={`workspace-upload-status ${uploadStatus.kind}`}>
-          <span>{uploadStatus.message}</span>
-          {uploadStatus.percent !== undefined ? <span>{uploadStatus.percent}%</span> : null}
-          {uploadStatus.kind === "uploading" ? (
-            <div className="workspace-upload-bar">
-              <span style={{ width: `${uploadStatus.percent ?? 12}%` }} />
-            </div>
-          ) : null}
-        </div>
-      ) : null}
       {contextMenu ? (
         <div
           className="workspace-context-menu"

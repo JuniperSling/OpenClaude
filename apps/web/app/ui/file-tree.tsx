@@ -1,6 +1,6 @@
 "use client";
 
-import type { MouseEvent } from "react";
+import { useState, type MouseEvent } from "react";
 import type { WorkspaceFileNode } from "./api";
 
 export function FileTree({
@@ -33,6 +33,20 @@ export function FileTree({
   rawUrl: (path: string, token: string) => string;
 }) {
   const children = node.children ?? [];
+  const [collapsedPaths, setCollapsedPaths] = useState<Set<string>>(() => new Set());
+
+  function toggleDirectory(path: string) {
+    setCollapsedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  }
+
   return (
     <div className="file-tree" onContextMenu={(event) => onContextMenu(event)}>
       {children.length === 0 ? <div className="workspace-empty">暂无文件，拖拽文件到这里上传</div> : null}
@@ -43,6 +57,7 @@ export function FileTree({
           selectedPath={selectedPath}
           token={token}
           dropTargetPath={dropTargetPath}
+          collapsedPaths={collapsedPaths}
           depth={0}
           onSelect={onSelect}
           onOpenPreview={onOpenPreview}
@@ -52,6 +67,7 @@ export function FileTree({
           onMove={onMove}
           onUploadToDirectory={onUploadToDirectory}
           onDropTargetChange={onDropTargetChange}
+          onToggleDirectory={toggleDirectory}
           rawUrl={rawUrl}
         />
       ))}
@@ -64,6 +80,7 @@ function FileTreeNode({
   selectedPath,
   token,
   dropTargetPath,
+  collapsedPaths,
   depth,
   onSelect,
   onOpenPreview,
@@ -73,12 +90,14 @@ function FileTreeNode({
   onMove,
   onUploadToDirectory,
   onDropTargetChange,
+  onToggleDirectory,
   rawUrl
 }: {
   node: WorkspaceFileNode;
   selectedPath?: string;
   token: string;
   dropTargetPath?: string;
+  collapsedPaths: Set<string>;
   depth: number;
   onSelect: (node: WorkspaceFileNode) => void;
   onOpenPreview: (node: WorkspaceFileNode) => void;
@@ -88,10 +107,12 @@ function FileTreeNode({
   onMove: (fromPath: string, targetDirectory: string) => void;
   onUploadToDirectory: (dataTransfer: DataTransfer, targetDirectory: string) => void;
   onDropTargetChange: (path?: string) => void;
+  onToggleDirectory: (path: string) => void;
   rawUrl: (path: string, token: string) => string;
 }) {
   const isDirectory = node.type === "directory";
   const canDropInto = isDirectory;
+  const isCollapsed = isDirectory && collapsedPaths.has(node.path);
   return (
     <div className="file-tree-node">
       <div
@@ -102,7 +123,11 @@ function FileTreeNode({
         style={{ paddingLeft: 8 + depth * 14 }}
         onClick={() => {
           onSelect(node);
-          if (!isDirectory) onOpenPreview(node);
+          if (isDirectory) {
+            onToggleDirectory(node.path);
+          } else {
+            onOpenPreview(node);
+          }
         }}
         onContextMenu={(event) => onContextMenu(event, node)}
         onDragStart={(event) => {
@@ -142,7 +167,7 @@ function FileTreeNode({
           }
         }}
       >
-        <span className="file-icon">{isDirectory ? "▸" : fileIcon(node)}</span>
+        <span className="file-icon">{isDirectory ? (isCollapsed ? "▸" : "▾") : fileIcon(node)}</span>
         <span className="file-name" title={node.path}>
           {node.name}
         </span>
@@ -184,7 +209,7 @@ function FileTreeNode({
           </button>
         ) : null}
       </div>
-      {isDirectory && node.children?.length ? (
+      {isDirectory && !isCollapsed && node.children?.length ? (
         <div>
           {node.children.map((child) => (
             <FileTreeNode
@@ -193,6 +218,7 @@ function FileTreeNode({
               selectedPath={selectedPath}
               token={token}
               dropTargetPath={dropTargetPath}
+              collapsedPaths={collapsedPaths}
               depth={depth + 1}
               onSelect={onSelect}
               onOpenPreview={onOpenPreview}
@@ -202,6 +228,7 @@ function FileTreeNode({
               onMove={onMove}
               onUploadToDirectory={onUploadToDirectory}
               onDropTargetChange={onDropTargetChange}
+              onToggleDirectory={onToggleDirectory}
               rawUrl={rawUrl}
             />
           ))}
