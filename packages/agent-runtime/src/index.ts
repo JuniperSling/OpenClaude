@@ -110,8 +110,13 @@ export class ClaudeAgentRuntime implements AgentRuntime {
           ...process.env,
           HOME: input.sharedHomePath,
           CLAUDE_CONFIG_DIR: input.sdkSessionStoragePath,
-          // Skip Debian PEP 668 friction so `pip install` works without
-          // any extra flags inside `sudo pip install ...`.
+          // Make `pip install --user` (and pip's automatic user-site
+          // fallback when /usr/lib is not writable) immediately usable —
+          // entry-point scripts land in $HOME/.local/bin which we now put
+          // on PATH. Persistent across runs since HOME is per-user.
+          PATH: `${input.sharedHomePath}/.local/bin:${process.env.PATH ?? ""}`,
+          // Skip Debian PEP 668 friction so `sudo pip install ...` works
+          // without extra flags.
           PIP_BREAK_SYSTEM_PACKAGES: "1",
           PIP_DISABLE_PIP_VERSION_CHECK: "1",
           ANTHROPIC_BASE_URL: this.options.baseUrl ?? "https://openrouter.ai/api",

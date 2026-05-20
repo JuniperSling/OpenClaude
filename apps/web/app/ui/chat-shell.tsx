@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { type ReactNode, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import type { AgentStreamEnvelope, RunSnapshot, SessionWithWorkspace } from "@openclaude/shared";
@@ -289,6 +289,14 @@ export function ChatShell() {
     if (!stickToBottomRef.current) return;
     chatEndRef.current?.scrollIntoView({ block: "end" });
   }, [messages, activeRunId]);
+
+  // When the user scrolls back to the bottom, the composer expands and
+  // pushes the visible bottom up. Snap to the very end after the layout
+  // settles so the latest streaming output stays in view.
+  useLayoutEffect(() => {
+    if (!isAtBottom) return;
+    chatEndRef.current?.scrollIntoView({ block: "end" });
+  }, [isAtBottom]);
 
   function handleChatScroll(event: React.UIEvent<HTMLElement>) {
     const el = event.currentTarget;
